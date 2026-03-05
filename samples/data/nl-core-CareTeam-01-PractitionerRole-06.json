@@ -1,0 +1,1 @@
+{"resourceType":"PractitionerRole","id":"nl-core-CareTeam-01-PractitionerRole-06","meta":{"profile":["http://nictiz.nl/fhir/StructureDefinition/nl-core-HealthProfessional-PractitionerRole"]},"practitioner":{"reference":"Practitioner/nl-core-CareTeam-01-Practitioner-06","type":"Practitioner","display":"Healthcare professional (person), K. van der Linden"}}

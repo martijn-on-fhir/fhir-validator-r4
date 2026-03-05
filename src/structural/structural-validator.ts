@@ -72,7 +72,7 @@ export class StructuralValidator {
         );
       } else {
         // --- Non-sliced validation (existing logic) ---
-        const values = this.fhirPath.getValues(resource, relPath);
+        const values = this.resolveValues(resource, relPath);
 
         issues.push(...this.validateCardinality(element, values, relPath, resource));
 
@@ -94,7 +94,16 @@ export class StructuralValidator {
         // FHIRPath constraints only apply when the element is present or required
         if (values.length > 0 || element.min > 0) {
           for (const constraint of element.constraint ?? []) {
-            issues.push(...this.validateConstraint(resource, constraint, relPath));
+            // Evaluate constraint per element value, not against root resource
+            if (values.length > 0) {
+              for (const value of values) {
+                if (value !== null && value !== undefined && typeof value === 'object') {
+                  issues.push(...this.validateConstraint(value as Record<string, unknown>, constraint, relPath, resource));
+                }
+              }
+            } else {
+              issues.push(...this.validateConstraint(resource, constraint, relPath, resource));
+            }
           }
         }
       }
@@ -177,7 +186,19 @@ export class StructuralValidator {
           matchValue = el.patternCoding || el.patternCodeableConcept || el.patternIdentifier;
         }
       }
-      // 'profile' and 'exists' discriminators: matchValue stays undefined → accept all
+
+      // 'exists' discriminator: determine if the slice expects the field to exist or not
+      if (disc.type === 'exists' && disc.path) {
+        // Check if the slice's child element for this path has min≥1 (exists) or max=0 (not exists)
+        const childId = el.id + '.' + disc.path;
+        const childEl = elements.find(e => e.id === childId);
+
+        if (childEl) {
+          // matchValue = true means "field must exist", false means "field must not exist"
+          matchValue = childEl.max !== '0';
+        }
+      }
+      // 'profile' discriminators: matchValue stays undefined → accept all
 
       map.set(el.id, {
         discriminatorType: disc.type,
@@ -382,8 +403,16 @@ export class StructuralValidator {
 
         return true;
 
+      case 'exists': {
+        const fieldValue = obj[matchInfo.discriminatorPath];
+        const fieldExists = fieldValue !== undefined && fieldValue !== null &&
+          !(Array.isArray(fieldValue) && fieldValue.length === 0);
+
+        return matchInfo.matchValue === true ? fieldExists : !fieldExists;
+      }
+
       default:
-        // 'profile', 'exists': not implemented, accept all
+        // 'profile': not implemented, accept all
         return true;
     }
   }
@@ -400,12 +429,46 @@ export class StructuralValidator {
     const p = pattern as Record<string, unknown>;
 
     for (const key of Object.keys(p)) {
-      if (instance[key] !== p[key]) {
+      if (!this.deepMatchesPattern(instance[key], p[key])) {
         return false;
       }
     }
 
     return true;
+  }
+
+  /**
+   * Deep pattern matching: for arrays, check that every pattern element has a match
+   * in the instance array. For objects, recurse. For primitives, compare directly.
+   */
+  private deepMatchesPattern(instanceValue: unknown, patternValue: unknown): boolean {
+    if (patternValue === instanceValue) {
+return true;
+}
+
+    if (patternValue === null || patternValue === undefined) {
+return true;
+}
+
+    if (Array.isArray(patternValue)) {
+      if (!Array.isArray(instanceValue)) {
+return false;
+}
+
+      // Every element in the pattern array must have a matching element in the instance
+      return patternValue.every(pItem =>
+        instanceValue.some(iItem => this.deepMatchesPattern(iItem, pItem))
+      );
+    }
+
+    if (typeof patternValue === 'object' && typeof instanceValue === 'object' && instanceValue !== null) {
+      const pObj = patternValue as Record<string, unknown>;
+      const iObj = instanceValue as Record<string, unknown>;
+
+      return Object.keys(pObj).every(k => this.deepMatchesPattern(iObj[k], pObj[k]));
+    }
+
+    return false;
   }
 
   /**
@@ -449,6 +512,48 @@ export class StructuralValidator {
   // -------------------------------------------------------
   // Field value extraction
   // -------------------------------------------------------
+
+  /**
+   * Resolve values for a relPath, handling [x] choice types that fhirpath can't resolve.
+   */
+  private resolveValues(resource: FhirResource, relPath: string): unknown[] {
+    // Handle choice types like effective[x], value[x], deceased[x]
+    if (relPath.includes('[x]')) {
+      const parts = relPath.split('.');
+      const choiceIdx = parts.findIndex(p => p.endsWith('[x]'));
+      // Navigate to the parent of the choice field
+      const parentPath = parts.slice(0, choiceIdx).join('.');
+      const choiceField = parts[choiceIdx];
+      const remainingParts = parts.slice(choiceIdx + 1);
+      const parents = parentPath ? this.fhirPath.getValues(resource, parentPath) : [resource];
+      const values: unknown[] = [];
+
+      for (const parent of parents) {
+        if (typeof parent === 'object' && parent !== null) {
+          const fieldValues = this.getFieldValues(parent as Record<string, unknown>, choiceField);
+          values.push(...fieldValues);
+        }
+      }
+
+      // If there are remaining path parts after the [x], continue navigating
+      if (remainingParts.length > 0) {
+        const subPath = remainingParts.join('.');
+        const result: unknown[] = [];
+
+        for (const v of values) {
+          if (typeof v === 'object' && v !== null) {
+            result.push(...this.fhirPath.getValues(v as Record<string, unknown>, subPath));
+          }
+        }
+
+        return result;
+      }
+
+      return values;
+    }
+
+    return this.fhirPath.getValues(resource, relPath);
+  }
 
   /**
    * Get child values from a parent object for a given field.
@@ -734,6 +839,7 @@ export class StructuralValidator {
     };
 
     const mapped = mappings[valueSetUrl.split('|')[0]];
+
     return mapped ? [mapped] : [];
   }
 
@@ -856,15 +962,20 @@ export class StructuralValidator {
   // FHIRPath constraints
   // -------------------------------------------------------
 
-  private validateConstraint(resource: object, constraint: ElementDefinitionConstraint, path: string): ValidationIssue[] {
+  private validateConstraint(instance: object, constraint: ElementDefinitionConstraint, path: string, resource?: object): ValidationIssue[] {
+
+    // ele-1: boilerplate "hasValue() or children()" — always true for present elements, skip
+    if (constraint.key === 'ele-1') {
+      return [];
+    }
 
     // ext-1: fhirpath.js can't resolve value[x] polymorphic fields — handle directly
     if (constraint.key === 'ext-1') {
-      return this.validateExt1(resource, path);
+      return this.validateExt1(instance, path);
     }
 
-    const context = {resource};
-    const {values, error} = this.fhirPath.evaluate(resource, constraint.expression, context);
+    const context = {resource: resource ?? instance};
+    const {values, error} = this.fhirPath.evaluate(instance, constraint.expression, context);
 
     if (error) {
       return [{

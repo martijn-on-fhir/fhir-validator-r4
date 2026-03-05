@@ -1,0 +1,1 @@
+{"resourceType":"PractitionerRole","id":"nl-core-SOAPReport-01-PractitionerRole-01","meta":{"profile":["http://nictiz.nl/fhir/StructureDefinition/nl-core-HealthProfessional-PractitionerRole"]},"practitioner":{"reference":"Practitioner/nl-core-SOAPReport-01-Practitioner-01","type":"Practitioner","display":"Healthcare professional (person), H.A. Janszens"}}

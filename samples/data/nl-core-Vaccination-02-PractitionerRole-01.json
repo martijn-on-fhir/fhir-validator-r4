@@ -1,0 +1,1 @@
+{"resourceType":"PractitionerRole","id":"nl-core-Vaccination-02-PractitionerRole-01","meta":{"profile":["http://nictiz.nl/fhir/StructureDefinition/nl-core-HealthProfessional-PractitionerRole"]},"organization":{"reference":"Organization/nl-core-Vaccination-02-Organization-01","type":"Organization","display":"Healthcare provider (organization), GG&GD Nijmegen"}}

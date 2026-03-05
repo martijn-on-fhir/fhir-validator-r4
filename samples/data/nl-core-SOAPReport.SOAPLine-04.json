@@ -1,0 +1,1 @@
+{"resourceType":"Observation","id":"nl-core-SOAPReport.SOAPLine-04","meta":{"profile":["http://nictiz.nl/fhir/StructureDefinition/nl-core-SOAPReport.SOAPLine"]},"status":"final","code":{"coding":[{"system":"http://snomed.info/sct","code":"129271007","display":"Beleid"}]},"valueString":"Overzetten van enalapril naar telmisartan. Evaluatie over 2 weken."}

@@ -1,0 +1,1 @@
+{"resourceType":"Location","id":"nl-core-MedicalDevice-03-Location-01","meta":{"profile":["http://nictiz.nl/fhir/StructureDefinition/nl-core-HealthcareProvider"]},"managingOrganization":{"reference":"Organization/nl-core-MedicalDevice-03-Organization-01","type":"Organization","display":"Healthcare provider (organization), Academisch Medisch Centrum"}}

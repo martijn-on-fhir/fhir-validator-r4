@@ -1,0 +1,1 @@
+{"resourceType":"Specimen","id":"nl-core-LaboratoryTestResult.Specimen-02","meta":{"profile":["http://nictiz.nl/fhir/StructureDefinition/nl-core-LaboratoryTestResult.Specimen"]},"type":{"coding":[{"system":"http://snomed.info/sct","code":"87612001","display":"bloed"}]}}

@@ -207,7 +207,7 @@ export class TerminologyService {
         // If local validation fails and Nictiz is available, validate against CodeSystem
         // (not the ValueSet — Nictiz may not have FHIR core ValueSets like observation-codes)
         if (this.nictizClient && !this.options.disableExternalCalls) {
-          return this.validateViaNictiz(system, code);
+          return this.validateViaNictiz(system, code, undefined, bindingStrength);
         }
 
         return localResult;
@@ -215,7 +215,7 @@ export class TerminologyService {
 
       // Fallback to Nictiz terminologieserver (if configured)
       if (this.nictizClient && !this.options.disableExternalCalls) {
-        return this.validateViaNictiz(system, code, valueSetUrl);
+        return this.validateViaNictiz(system, code, valueSetUrl, bindingStrength);
       }
 
       // Fallback to generic external server (if allowed)
@@ -257,7 +257,7 @@ export class TerminologyService {
 
     // 5. Nictiz terminologieserver for unknown systems
     if (this.nictizClient && !this.options.disableExternalCalls) {
-      return this.validateViaNictiz(system, code);
+      return this.validateViaNictiz(system, code, undefined, bindingStrength);
     }
 
     // 6. Unknown system
@@ -431,7 +431,7 @@ export class TerminologyService {
     }
   }
 
-  private async validateViaNictiz(system: string, code: string, valueSetUrl?: string): Promise<CodeValidationResult> {
+  private async validateViaNictiz(system: string, code: string, valueSetUrl?: string, bindingStrength: BindingStrength = 'required'): Promise<CodeValidationResult> {
 
     if (!this.nictizClient) {
       return {valid: true, message: 'Nictiz client not configured'};
@@ -443,6 +443,13 @@ export class TerminologyService {
 
     this.externalCallTimestamps.push(Date.now());
     const result = await this.nictizClient.validateCode(system, code, valueSetUrl);
+
+    // If the server says the system/CodeSystem can't be resolved (not that the code is wrong
+    // within a known system), accept — we can't validate what we can't resolve
+    if (!result.valid && result.message
+        && /could not be resolved|unknown code system|not supported/i.test(result.message)) {
+      return {valid: true, message: `System '${system}' not resolvable by terminology server, validation skipped`};
+    }
 
     return {
       valid: result.valid,
