@@ -1,0 +1,15 @@
+{
+  "resourceType": "CodeSystem",
+  "id": "2.16.840.1.113883.2.4.3.11.60.40.4.23.1",
+  "url": "urn:oid:2.16.840.1.113883.2.4.3.11.60.40.4.23.1",
+  "name": "RolCodelijstExtra",
+  "title": "RolCodelijst aanvullende codes (zib ContactPerson)",
+  "status": "active",
+  "content": "complete",
+  "concept": [
+    {"code": "100001", "display": "Mantelzorger"},
+    {"code": "100002", "display": "Geestelijk verzorger"},
+    {"code": "100003", "display": "Tolk"},
+    {"code": "100004", "display": "Advocaat"}
+  ]
+}

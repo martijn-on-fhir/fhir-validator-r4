@@ -9,6 +9,7 @@ import type {
   BindingStrength
 } from '../types/fhir';
 import {NictizTerminologyClient, type NictizTerminologyConfig} from './nictiz-terminology-client';
+import {ArtDecorClient} from './art-decor-client';
 
 /**
  * BSN elfproef (11-test) — validates Dutch citizen service numbers.
@@ -42,6 +43,13 @@ const PATTERN_VALIDATORS: Record<string, PatternValidator> = {
   'urn:oid:2.16.528.1.1007.3.1': /^\d{9}$/,   // BIG-register
 };
 
+// Well-known OID-to-URL aliases (same CodeSystem, different identifiers)
+const SYSTEM_ALIASES: Record<string, string> = {
+  'urn:oid:1.0.639.1': 'http://terminology.hl7.org/CodeSystem/iso639-1',
+  'urn:oid:2.16.840.1.113883.6.121': 'http://terminology.hl7.org/CodeSystem/iso639-2',
+  'urn:ietf:bcp:47': 'urn:ietf:bcp:47',
+};
+
 // Systems we always accept as valid (cannot be validated locally)
 const TRUSTED_SYSTEMS = new Set([
   'http://terminology.hl7.org/CodeSystem/v3-ActCode',
@@ -54,6 +62,9 @@ const TRUSTED_SYSTEMS = new Set([
   'http://hl7.org/fhir/identifier-use',
   'http://hl7.org/fhir/allergy-intolerance-type',
   'http://hl7.org/fhir/observation-status',
+  'urn:ietf:bcp:47',                              // BCP 47 language tags
+  'http://terminology.hl7.org/CodeSystem/iso639-1', // ISO 639-1 language codes
+  'http://terminology.hl7.org/CodeSystem/iso639-2', // ISO 639-2 language codes
 ]);
 
 export interface TerminologyServiceOptions {
@@ -67,6 +78,15 @@ export interface TerminologyServiceOptions {
   externalRateLimit?: number;
   /** Nictiz terminologieserver credentials (loaded from config.local.json) */
   nictiz?: NictizTerminologyConfig;
+  /** Art-decor FHIR server for automatic ValueSet/CodeSystem resolution */
+  artDecor?: {
+    /** Base URL (default: https://decor.nictiz.nl/fhir) */
+    baseUrl?: string;
+    /** Timeout in ms (default: 10000) */
+    timeoutMs?: number;
+    /** Disable art-decor lookups (default: false) */
+    disabled?: boolean;
+  };
 }
 
 export class TerminologyService {
@@ -75,6 +95,7 @@ export class TerminologyService {
   private codeSystems = new Map<string, CodeSystem>();
   private options: TerminologyServiceOptions;
   private nictizClient: NictizTerminologyClient | null = null;
+  private artDecorClient: ArtDecorClient | null = null;
 
   // Cache for external lookups
   private externalCache = new Map<string, CodeValidationResult>();
@@ -90,6 +111,13 @@ export class TerminologyService {
 
     if (options.nictiz) {
       this.nictizClient = new NictizTerminologyClient(options.nictiz);
+    }
+
+    if (!options.artDecor?.disabled && !options.disableExternalCalls) {
+      this.artDecorClient = new ArtDecorClient(
+        options.artDecor?.baseUrl,
+        options.artDecor?.timeoutMs,
+      );
     }
   }
 
@@ -143,7 +171,10 @@ export class TerminologyService {
   /**
    * Validate a code against a binding
    */
-  async validateCode(system: string, code: string, valueSetUrl?: string, _bindingStrength: BindingStrength = 'required'): Promise<CodeValidationResult> {
+  async validateCode(rawSystem: string, code: string, valueSetUrl?: string, bindingStrength: BindingStrength = 'required'): Promise<CodeValidationResult> {
+
+    // Resolve system aliases (e.g. urn:oid:1.0.639.1 → http://terminology.hl7.org/CodeSystem/iso639-1)
+    const system = SYSTEM_ALIASES[rawSystem] ?? rawSystem;
 
     // 1. Validate via ValueSet if specified
     if (valueSetUrl) {
@@ -151,12 +182,31 @@ export class TerminologyService {
       const vsUrlClean = valueSetUrl.split('|')[0];
       const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
 
-      if (vs) {
-        const localResult = this.validateAgainstValueSet(system, code, vs);
+      const resolvedVs = vs ?? await this.resolveValueSetFromArtDecor(vsUrlClean);
+
+      if (resolvedVs) {
+        const localResult = this.validateAgainstValueSet(system, code, resolvedVs);
+
+        if (localResult.valid) {
+          return localResult;
+        }
+
+        // For extensible/preferred bindings, codes from other systems are allowed
+        if (bindingStrength !== 'required' && !this.valueSetContainsSystem(resolvedVs, system)) {
+          return {valid: true};
+        }
+
+        // If the system is trusted (e.g. ISO 639) and the ValueSet doesn't enumerate
+        // codes for it (just references the system), accept — failure is due to missing
+        // CodeSystem data, not an actually invalid code
+        if (TRUSTED_SYSTEMS.has(system) && !this.codeSystems.has(system)
+            && !this.valueSetHasExplicitCodes(resolvedVs, system)) {
+          return {valid: true};
+        }
 
         // If local validation fails and Nictiz is available, validate against CodeSystem
         // (not the ValueSet — Nictiz may not have FHIR core ValueSets like observation-codes)
-        if (!localResult.valid && this.nictizClient && !this.options.disableExternalCalls) {
+        if (this.nictizClient && !this.options.disableExternalCalls) {
           return this.validateViaNictiz(system, code);
         }
 
@@ -181,7 +231,7 @@ export class TerminologyService {
     }
 
     // 2. Validate directly against CodeSystem
-    const cs = this.codeSystems.get(system);
+    const cs = this.codeSystems.get(system) ?? await this.resolveCodeSystemFromArtDecor(system);
 
     if (cs) {
       return this.validateAgainstCodeSystem(code, cs);
@@ -415,6 +465,82 @@ export class TerminologyService {
     }
 
     return vs.compose?.include?.[0]?.system;
+  }
+
+  /**
+   * Check if a ValueSet has explicit concept codes for a given system
+   * (as opposed to just referencing the system without enumerating codes).
+   */
+  private valueSetHasExplicitCodes(vs: ValueSet, system: string): boolean {
+
+    if (vs.expansion?.contains) {
+      return vs.expansion.contains.some(c => c.system === system);
+    }
+
+    return (vs.compose?.include ?? []).some(
+      inc => inc.system === system && inc.concept && inc.concept.length > 0
+    );
+  }
+
+  /**
+   * Check if a ValueSet references a given system in its compose.include or expansion.
+   */
+  private valueSetContainsSystem(vs: ValueSet, system: string): boolean {
+
+    if (vs.expansion?.contains) {
+      return vs.expansion.contains.some(c => c.system === system);
+    }
+
+    return (vs.compose?.include ?? []).some(inc => inc.system === system);
+  }
+
+  /**
+   * Try to fetch a ValueSet from art-decor and register it locally for future lookups.
+   */
+  private async resolveValueSetFromArtDecor(url: string): Promise<ValueSet | null> {
+
+    if (!this.artDecorClient) {
+      return null;
+    }
+
+    const vs = await this.artDecorClient.fetchValueSet(url);
+
+    if (vs) {
+      this.registerValueSet(vs);
+
+      // Also register any CodeSystems referenced in compose.include that have explicit concepts
+      for (const include of vs.compose?.include ?? []) {
+        if (include.system && include.concept?.length && !this.codeSystems.has(include.system)) {
+          this.registerCodeSystem({
+            resourceType: 'CodeSystem',
+            url: include.system,
+            status: 'active',
+            content: 'complete',
+            concept: include.concept.map(c => ({code: c.code, display: c.display})),
+          });
+        }
+      }
+    }
+
+    return vs;
+  }
+
+  /**
+   * Try to fetch a CodeSystem from art-decor and register it locally for future lookups.
+   */
+  private async resolveCodeSystemFromArtDecor(systemUrl: string): Promise<CodeSystem | null> {
+
+    if (!this.artDecorClient) {
+      return null;
+    }
+
+    const cs = await this.artDecorClient.fetchCodeSystem(systemUrl);
+
+    if (cs) {
+      this.registerCodeSystem(cs);
+    }
+
+    return cs;
   }
 
   stats(): { valueSets: number; codeSystems: number; cachedLookups: number; nictizConfigured: boolean } {

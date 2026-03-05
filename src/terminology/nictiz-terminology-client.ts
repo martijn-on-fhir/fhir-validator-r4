@@ -147,8 +147,14 @@ export class NictizTerminologyClient {
         const resultParam = data.parameter?.find(p => p.name === 'result');
         const displayParam = data.parameter?.find(p => p.name === 'display');
         const messageParam = data.parameter?.find(p => p.name === 'message');
+        const msg = messageParam?.valueString ?? '';
 
-        result = {valid: resultParam?.valueBoolean === true, display: displayParam?.valueString, message: messageParam?.valueString};
+        // If the server says "CodeSystem not found", it can't validate — don't treat as invalid
+        if (!resultParam?.valueBoolean && (msg.includes('could not be found') || msg.includes('was not found'))) {
+          result = {valid: true, message: `CodeSystem ${system} not available on Nictiz, validation skipped`};
+        } else {
+          result = {valid: resultParam?.valueBoolean === true, display: displayParam?.valueString, message: msg || undefined};
+        }
       }
 
       this.cache.set(cacheKey, result);

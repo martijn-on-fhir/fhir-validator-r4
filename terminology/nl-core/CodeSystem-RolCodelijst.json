@@ -1,0 +1,27 @@
+{
+  "resourceType": "CodeSystem",
+  "id": "2.16.840.1.113883.2.4.3.11.22.472",
+  "url": "urn:oid:2.16.840.1.113883.2.4.3.11.22.472",
+  "name": "RolCodelijst",
+  "title": "RolCodelijst",
+  "status": "active",
+  "content": "complete",
+  "concept": [
+    {"code": "01", "display": "Eerste relatie/contactpersoon"},
+    {"code": "02", "display": "Tweede relatie/contactpersoon"},
+    {"code": "03", "display": "Curator (juridisch)"},
+    {"code": "04", "display": "Financieel (gemachtigd)"},
+    {"code": "05", "display": "Financieel (toetsing)"},
+    {"code": "06", "display": "Leefeenheid"},
+    {"code": "07", "display": "Hulpverlener"},
+    {"code": "09", "display": "Anders"},
+    {"code": "11", "display": "Voogd"},
+    {"code": "14", "display": "Bewindvoerder"},
+    {"code": "15", "display": "Mentor"},
+    {"code": "19", "display": "Buur"},
+    {"code": "20", "display": "Vriend(in)/kennis"},
+    {"code": "21", "display": "Cliëntondersteuner"},
+    {"code": "23", "display": "Contactpersoon"},
+    {"code": "24", "display": "Wettelijke vertegenwoordiger"}
+  ]
+}

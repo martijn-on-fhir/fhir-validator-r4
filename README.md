@@ -7,8 +7,11 @@ A TypeScript/Node.js library for validating FHIR R4 resources against StructureD
 - **Profile-based validation** — validate resources against FHIR StructureDefinition profiles (snapshot and differential)
 - **Cardinality checks** — enforces min/max element constraints
 - **Type validation** — verifies FHIR primitive and complex types including date/dateTime/instant/time format validation
-- **Terminology binding** — validates codes against ValueSets and CodeSystems (local + Nictiz + optional external tx server)
+- **Terminology binding** — validates codes against ValueSets and CodeSystems (local + art-decor + Nictiz + optional external tx server)
+- **Art-decor auto-resolution** — automatically fetches missing ValueSets and CodeSystems from `decor.nictiz.nl` at runtime
 - **Nictiz terminologieserver** — OAuth2 integration with the Dutch national terminology server for SNOMED CT NL validation
+- **Extensible binding support** — codes from systems outside the ValueSet are accepted for extensible/preferred bindings (FHIR spec)
+- **System aliases** — maps well-known OID URNs to canonical HL7 URLs (e.g. `urn:oid:1.0.639.1` to `iso639-1`)
 - **FHIRPath constraints** — evaluates FHIRPath invariant expressions
 - **Slicing support** — handles discriminated slicing (value, type, pattern discriminators)
 - **Fixed & pattern value checks** — enforces fixedCoding, patternIdentifier, etc.
@@ -122,6 +125,9 @@ Factory method that creates a validator and loads profiles/terminology.
 | `terminology.externalTimeoutMs` | `number` | Timeout for external calls (default: 5000) |
 | `terminology.externalRateLimit` | `number` | Max external requests per minute (default: 30) |
 | `terminology.disableExternalCalls` | `boolean` | Block all external terminology calls |
+| `terminology.artDecor.baseUrl` | `string` | Art-decor FHIR base URL (default: `https://decor.nictiz.nl/fhir`) |
+| `terminology.artDecor.timeoutMs` | `number` | Art-decor fetch timeout (default: 10000) |
+| `terminology.artDecor.disabled` | `boolean` | Disable art-decor auto-resolution |
 | `severityOverrides` | `Record<string, IssueSeverity>` | Override severity per issue code |
 | `fhirVersion` | `string` | Accepted FHIR version (e.g. `"4.0.1"`) |
 
@@ -165,12 +171,27 @@ Returns counts of loaded profiles, ValueSets, CodeSystems, cached terminology lo
 When validating a code, the terminology service uses the following cascade:
 
 1. **Local ValueSet** — check expansion or compose against locally loaded ValueSets
-2. **Nictiz fallback** — if local validation fails, try the Nictiz `CodeSystem/$lookup` endpoint
-3. **Local CodeSystem** — validate directly against a locally loaded CodeSystem
-4. **Pattern validation** — format checks for known systems (SNOMED, LOINC, BSN elfproef, AGB-Z, UZI, NPI)
-5. **Trusted systems** — always accept codes from well-known FHIR systems (administrative-gender, etc.)
-6. **Nictiz CodeSystem** — for completely unknown systems, try Nictiz
-7. **Skip** — if nothing can validate the code, accept it with a message
+2. **Art-decor auto-fetch** — if the ValueSet URL is from `decor.nictiz.nl`, fetch and register it (with its CodeSystems)
+3. **Extensible binding check** — for extensible/preferred bindings, accept codes from systems not in the ValueSet
+4. **Trusted system check** — accept codes from well-known systems when no CodeSystem is available to validate against
+5. **Nictiz fallback** — if local validation fails, try the Nictiz `CodeSystem/$lookup` endpoint
+6. **Local CodeSystem** — validate directly against a locally loaded CodeSystem
+7. **Art-decor CodeSystem** — for `urn:oid:` systems, search art-decor for the CodeSystem
+8. **Pattern validation** — format checks for known systems (SNOMED, LOINC, BSN elfproef, AGB-Z, UZI, NPI)
+9. **Trusted systems** — always accept codes from well-known FHIR systems (administrative-gender, etc.)
+10. **Nictiz CodeSystem** — for completely unknown systems, try Nictiz
+11. **Skip** — if nothing can validate the code, accept it with a message
+
+### System Aliases
+
+The validator maps well-known OID URNs to their canonical HL7 URLs before validation:
+
+| OID | Canonical URL |
+|---|---|
+| `urn:oid:1.0.639.1` | `http://terminology.hl7.org/CodeSystem/iso639-1` |
+| `urn:oid:2.16.840.1.113883.6.121` | `http://terminology.hl7.org/CodeSystem/iso639-2` |
+
+This ensures that Dutch FHIR resources using OID-based system URLs match ValueSets that reference the canonical HL7 URLs.
 
 ## Resource Files
 
@@ -182,7 +203,7 @@ The validator needs FHIR StructureDefinitions, ValueSets, and CodeSystems as JSO
 profiles/r4-core/     -- Base FHIR R4 StructureDefinitions (658 files)
 profiles/nl-core/     -- nl-core profile overlays (164 files)
 terminology/r4-core/  -- Base FHIR R4 ValueSets and CodeSystems (2378 files)
-terminology/nl-core/  -- nl-core terminology (4 files)
+terminology/nl-core/  -- nl-core terminology (8 files)
 ```
 
 Directories are loaded in order — base definitions first so that profile overlays can inherit from them.
