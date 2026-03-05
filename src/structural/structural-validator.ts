@@ -305,6 +305,10 @@ export class StructuralValidator {
 
         if (matchInfo && matchInfo.matchValue !== undefined) {
           children = children.filter(c => this.matchesDiscriminator(c, matchInfo));
+        } else if (matchInfo && matchInfo.matchValue === undefined) {
+          // Discriminator can't be evaluated (e.g. profile type with resolve()) —
+          // skip cardinality for this slice since we can't determine membership
+          continue;
         }
       }
 
@@ -637,20 +641,32 @@ export class StructuralValidator {
 
     // Handle plain `code` / `string` type (e.g. gender: "female")
     if (typeof value === 'string') {
-      // Look up the system from the ValueSet
-      const system = this.inferSystemFromValueSet(binding.valueSet);
+      // Try all systems from the ValueSet (multi-system ValueSets like defined-types)
+      const systems = this.inferSystemsFromValueSet(binding.valueSet);
 
-      if (system) {
-        const result = await this.terminology.validateCode(
-          system, value, binding.valueSet,
-          binding.strength as BindingStrength
-        );
+      if (systems.length > 0) {
+        let anyValid = false;
+        let lastMessage = '';
 
-        if (!result.valid) {
+        for (const system of systems) {
+          const result = await this.terminology.validateCode(
+            system, value, binding.valueSet,
+            binding.strength as BindingStrength
+          );
+
+          if (result.valid) {
+            anyValid = true;
+            break;
+          }
+
+          lastMessage = result.message ?? '';
+        }
+
+        if (!anyValid) {
           const severity = binding.strength === 'required' ? 'error' : 'warning';
           issues.push({
             severity, path, code: 'CODE_INVALID',
-            message: `Invalid code value for '${path}'. ${result.message ?? ''}`
+            message: `Invalid code value for '${path}'. ${lastMessage}`
           });
         }
       }
@@ -694,19 +710,18 @@ export class StructuralValidator {
   }
 
   /**
-   * Infer the code system from a ValueSet URL for plain code types.
-   * Uses dynamic lookup from loaded ValueSets, with known mappings as fallback.
+   * Infer all possible code systems from a ValueSet URL for plain code types.
    */
-  private inferSystemFromValueSet(valueSetUrl?: string): string | undefined {
+  private inferSystemsFromValueSet(valueSetUrl?: string): string[] {
     if (!valueSetUrl) {
-      return undefined;
+      return [];
     }
 
     // Dynamic: look up from loaded ValueSets
-    const dynamic = this.terminology.inferSystemFromValueSet(valueSetUrl);
+    const systems = this.terminology.inferSystemsFromValueSet(valueSetUrl);
 
-    if (dynamic) {
-      return dynamic;
+    if (systems.length > 0) {
+      return systems;
     }
 
     // Static fallback for common FHIR ValueSets
@@ -718,7 +733,8 @@ export class StructuralValidator {
       'http://hl7.org/fhir/ValueSet/observation-status': 'http://hl7.org/fhir/observation-status',
     };
 
-    return mappings[valueSetUrl.split('|')[0]];
+    const mapped = mappings[valueSetUrl.split('|')[0]];
+    return mapped ? [mapped] : [];
   }
 
   private extractCodings(value: unknown): Coding[] {
@@ -842,7 +858,13 @@ export class StructuralValidator {
 
   private validateConstraint(resource: object, constraint: ElementDefinitionConstraint, path: string): ValidationIssue[] {
 
-    const {values, error} = this.fhirPath.evaluate(resource, constraint.expression);
+    // ext-1: fhirpath.js can't resolve value[x] polymorphic fields — handle directly
+    if (constraint.key === 'ext-1') {
+      return this.validateExt1(resource, path);
+    }
+
+    const context = {resource};
+    const {values, error} = this.fhirPath.evaluate(resource, constraint.expression, context);
 
     if (error) {
       return [{
@@ -866,6 +888,28 @@ export class StructuralValidator {
         code: constraint.key,
         message: `[${constraint.key}] ${constraint.human}`,
         expression: constraint.expression
+      }];
+    }
+
+    return [];
+  }
+
+  /**
+   * Direct implementation of ext-1: "Must have either extensions or value[x], not both."
+   * fhirpath.js can't resolve `value.exists()` for polymorphic value[x] properties.
+   */
+  private validateExt1(instance: object, path: string): ValidationIssue[] {
+
+    const obj = instance as Record<string, unknown>;
+    const hasExtension = Array.isArray(obj.extension) && obj.extension.length > 0;
+    const hasValue = Object.keys(obj).some(k => k.startsWith('value'));
+
+    if (hasExtension && hasValue) {
+      return [{
+        severity: 'error',
+        path,
+        code: 'ext-1',
+        message: '[ext-1] Must have either extensions or value[x], not both',
       }];
     }
 

@@ -35,7 +35,7 @@ async function main(): Promise<void> {
 
   console.log('Stats:', validator.stats());
 
-  const raw = fs.readFileSync(path.join(root, 'samples', 'data', 'nl-core-Patient-01.json'), 'utf8');
+  const raw = fs.readFileSync(path.join(root, 'samples', 'data', 'nl-core-EpisodeOfCare-02.json'), 'utf8');
   const resource = JSON.parse(raw);
 
   const result = await validator.validate(resource);

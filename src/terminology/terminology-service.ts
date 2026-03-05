@@ -468,6 +468,24 @@ export class TerminologyService {
   }
 
   /**
+   * Infer all code system URLs from a loaded ValueSet.
+   * Returns systems from all compose.include entries.
+   */
+  inferSystemsFromValueSet(valueSetUrl: string): string[] {
+
+    const vsUrlClean = valueSetUrl.split('|')[0];
+    const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
+
+    if (!vs) {
+      return [];
+    }
+
+    return (vs.compose?.include ?? [])
+      .map(inc => inc.system)
+      .filter((s): s is string => !!s);
+  }
+
+  /**
    * Check if a ValueSet has explicit concept codes for a given system
    * (as opposed to just referencing the system without enumerating codes).
    */
