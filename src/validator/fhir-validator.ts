@@ -1,17 +1,17 @@
-// src/validator/fhir-validator.ts
 import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';
 import { FhirPathEngine } from '../fhirpath/fhir-path-engine';
 import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
 import { StructuralValidator } from '../structural/structural-validator';
-import { TerminologyService, type TerminologyServiceOptions } from '../terminology/terminology-service';
 import type { NictizTerminologyConfig } from '../terminology/nictiz-terminology-client';
+import { TerminologyService, type TerminologyServiceOptions } from '../terminology/terminology-service';
 import type { IssueSeverity, ValidationIssue, ValidationResult } from '../types/fhir';
 
 /** Configurable severity overrides per issue code */
 export type SeverityOverrides = Record<string, IssueSeverity>;
 
 export interface FhirValidatorOptions {
+
   /** Directories with StructureDefinition JSON files (loaded in order) */
   profilesDirs?: string[];
   /** Directories with ValueSet / CodeSystem JSON files (loaded in order) */
@@ -28,6 +28,7 @@ export interface FhirValidatorOptions {
 const PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export class FhirValidator {
+
   readonly registry: StructureDefinitionRegistry;
   readonly terminology: TerminologyService;
   readonly fhirPath: FhirPathEngine;
@@ -36,6 +37,7 @@ export class FhirValidator {
   private fhirVersion?: string;
 
   private constructor(options: TerminologyServiceOptions = {}, severityOverrides: SeverityOverrides = {}, fhirVersion?: string) {
+
     this.registry = new StructureDefinitionRegistry();
     this.terminology = new TerminologyService(options);
     this.fhirPath = new FhirPathEngine();
@@ -53,6 +55,7 @@ export class FhirValidator {
    * Directories are loaded in order (e.g. r4-core first, then nl-core).
    */
   static async create(options: FhirValidatorOptions = {}): Promise<FhirValidator> {
+
     const validator = new FhirValidator(options.terminology, options.severityOverrides, options.fhirVersion);
 
     for (const dir of options.profilesDirs ?? []) {
@@ -72,6 +75,7 @@ export class FhirValidator {
    * or the base FHIR profile.
    */
   async validate(resource: unknown, profileUrl?: string): Promise<ValidationResult> {
+
     const validationId = randomUUID();
     const timestamp = new Date().toISOString();
 
@@ -105,6 +109,7 @@ export class FhirValidator {
 
     // Apply severity overrides
     if (Object.keys(this.severityOverrides).length > 0) {
+
       for (const issue of result.issues) {
         if (issue.code && this.severityOverrides[issue.code]) {
           issue.severity = this.severityOverrides[issue.code];
@@ -134,6 +139,7 @@ export class FhirValidator {
    * Scans top-level and nested keys for __proto__, constructor, prototype.
    */
   private checkPrototypePollution(resource: unknown, path = '', depth = 0): ValidationIssue[] {
+
     if (depth > 20 || !resource || typeof resource !== 'object') {
       return [];
     }
@@ -170,6 +176,7 @@ export class FhirValidator {
    * Check if a resource has valid JSON structure for FHIR
    */
   private checkStructure(resource: unknown): ValidationIssue[] {
+
     const issues: ValidationIssue[] = [];
 
     if (resource === null || resource === undefined) {
@@ -206,6 +213,7 @@ export class FhirValidator {
    * Check FHIR version compatibility
    */
   private checkFhirVersion(resource: Record<string, unknown>): ValidationIssue[] {
+
     const meta = resource.meta as { versionId?: string; profile?: string[] } | undefined;
 
     // Check if meta.tag contains fhirVersion, or check against known R4 resource types
@@ -235,6 +243,7 @@ export class FhirValidator {
    * Returns null if the file does not exist — safe to call unconditionally.
    */
   static async loadConfig(configPath: string): Promise<{ terminology?: NictizTerminologyConfig } | null> {
+
     try {
       const content = await readFile(configPath, 'utf8');
 

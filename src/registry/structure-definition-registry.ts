@@ -1,16 +1,18 @@
 // src/registry/structure-definition-registry.ts
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import type { StructureDefinition, ElementDefinition } from '../types/fhir';
+import type {StructureDefinition, ElementDefinition} from '../types/fhir';
 
 export class StructureDefinitionRegistry {
+
   private definitions = new Map<string, StructureDefinition>();
 
   /**
    * Load all StructureDefinitions from a directory (recursive)
    */
   async loadFromDirectory(dirPath: string): Promise<void> {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+    const entries = await fs.readdir(dirPath, {withFileTypes: true});
 
     for (const entry of entries) {
       const fullPath = path.join(dirPath, entry.name);
@@ -21,8 +23,8 @@ export class StructureDefinitionRegistry {
       }
 
       if (!entry.name.endsWith('.json')) {
-continue;
-}
+        continue;
+      }
 
       try {
         const content = JSON.parse(await fs.readFile(fullPath, 'utf8'));
@@ -43,12 +45,12 @@ continue;
     this.definitions.set(sd.url, sd);
 
     if (sd.name) {
-this.definitions.set(sd.name, sd);
-}
+      this.definitions.set(sd.name, sd);
+    }
 
     if (sd.id) {
-this.definitions.set(sd.id, sd);
-}
+      this.definitions.set(sd.id, sd);
+    }
   }
 
   /**
@@ -101,8 +103,7 @@ this.definitions.set(sd.id, sd);
    * Return all registered URLs
    */
   listUrls(): string[] {
-    return Array.from(this.definitions.keys())
-      .filter(k => k.startsWith('http'));
+    return Array.from(this.definitions.keys()).filter(k => k.startsWith('http'));
   }
 
   size(): number {

@@ -1,5 +1,5 @@
 // src/fhirpath/fhir-path-engine.ts
-import fhirpath, { type Model } from 'fhirpath';
+import fhirpath, {type Model} from 'fhirpath';
 
 // Try to load the R4 model
 let r4Model: Model | undefined;
@@ -31,8 +31,10 @@ export class FhirPathEngine {
         r4Model
       ) as unknown[];
 
-      return { values };
+      return {values};
+
     } catch (e) {
+
       return {
         values: [],
         error: `FHIRPath evaluation error in "${expression}": ${(e as Error).message}`
@@ -45,19 +47,20 @@ export class FhirPathEngine {
    * Returns true if the result is [true] or a non-empty list.
    */
   isTruthy(resource: object, expression: string, context?: object): boolean {
-    const { values } = this.evaluate(resource, expression, context);
+
+    const {values} = this.evaluate(resource, expression, context);
 
     if (values.length === 0) {
-return false;
-}
+      return false;
+    }
 
     if (values.length === 1 && values[0] === false) {
-return false;
-}
+      return false;
+    }
 
     if (values.length === 1 && values[0] === true) {
-return true;
-}
+      return true;
+    }
 
     // Non-empty list of nodes = true
     return values.length > 0;
@@ -67,11 +70,12 @@ return true;
    * Get all values for a path (e.g. "name.family")
    */
   getValues(resource: object, path: string): unknown[] {
-    if (!path) {
-return [resource];
-}
 
-    const { values } = this.evaluate(resource, path);
+    if (!path) {
+      return [resource];
+    }
+
+    const {values} = this.evaluate(resource, path);
 
     return values.flat().filter(v => v !== null && v !== undefined);
   }
@@ -81,6 +85,7 @@ return [resource];
    * and return the values as an array of objects
    */
   getNodes(resource: object, path: string): object[] {
+
     const values = this.getValues(resource, path);
 
     return values.filter((v): v is object => typeof v === 'object' && v !== null);

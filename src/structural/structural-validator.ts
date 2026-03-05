@@ -1,16 +1,7 @@
-// src/structural/structural-validator.ts
 import type {FhirPathEngine} from '../fhirpath/fhir-path-engine';
 import type {StructureDefinitionRegistry} from '../registry/structure-definition-registry';
 import type {TerminologyService} from '../terminology/terminology-service';
-import type {
-  StructureDefinition,
-  ElementDefinition,
-  ElementDefinitionConstraint,
-  ValidationIssue,
-  ValidationResult,
-  Coding,
-  BindingStrength
-} from '../types/fhir';
+import type {StructureDefinition, ElementDefinition, ElementDefinitionConstraint, ValidationIssue, ValidationResult, Coding, BindingStrength} from '../types/fhir';
 
 type FhirResource = Record<string, unknown>;
 
@@ -28,6 +19,7 @@ interface SliceMatchInfo {
 }
 
 export class StructuralValidator {
+
   constructor(private registry: StructureDefinitionRegistry, private terminology: TerminologyService, private fhirPath: FhirPathEngine) {
   }
 
@@ -36,14 +28,12 @@ export class StructuralValidator {
 
     // Determine which profile to validate against
     const meta = resource.meta as { profile?: string[] } | undefined;
-    const url =
-      profileUrl ??
-      meta?.profile?.[0] ??
-      `http://hl7.org/fhir/StructureDefinition/${resource.resourceType}`;
+    const url = profileUrl ?? meta?.profile?.[0] ?? `http://hl7.org/fhir/StructureDefinition/${resource.resourceType}`;
 
     const sd = this.registry.resolve(url);
 
     if (!sd) {
+
       return {
         valid: false,
         issues: [{
@@ -130,6 +120,7 @@ export class StructuralValidator {
    * using the parent's discriminator definition.
    */
   private buildSliceMap(elements: ElementDefinition[]): Map<string, SliceMatchInfo> {
+
     const map = new Map<string, SliceMatchInfo>();
 
     // Collect elements that define slicing
@@ -203,6 +194,7 @@ export class StructuralValidator {
    * Check if an element id contains slice context (has ':' in segments after the resource type).
    */
   private hasSliceContext(elementId: string): boolean {
+
     const dotIdx = elementId.indexOf('.');
 
     if (dotIdx < 0) {
@@ -218,6 +210,7 @@ export class StructuralValidator {
    * e.g., "Patient.extension:nationality.extension:code" → "Patient.extension:nationality.extension"
    */
   private getSliceParentId(sliceId: string): string {
+
     const parts = sliceId.split('.');
 
     for (let i = parts.length - 1; i >= 0; i--) {
@@ -238,6 +231,7 @@ export class StructuralValidator {
    * Returns the instances that are the immediate parents of the last segment in the id.
    */
   private resolveParentsAtId(resource: FhirResource, elementId: string, sliceMap: Map<string, SliceMatchInfo>): unknown[] {
+
     const parts = elementId.split('.');
     // parts[0] is the resource type, skip it
     // Walk parts[1..n-2] to resolve parents (stop before the last part)
@@ -284,6 +278,7 @@ export class StructuralValidator {
    * Validate a single element that is within a slice context.
    */
   private async validateSlicedElement(resource: FhirResource, element: ElementDefinition, relPath: string, sliceMap: Map<string, SliceMatchInfo>): Promise<ValidationIssue[]> {
+
     const issues: ValidationIssue[] = [];
     const elementId = element.id ?? '';
 
@@ -342,6 +337,7 @@ export class StructuralValidator {
    * Check if a resource instance matches a slice discriminator.
    */
   private matchesDiscriminator(instance: unknown, matchInfo: SliceMatchInfo): boolean {
+
     if (typeof instance !== 'object' || instance === null) {
       return false;
     }
@@ -392,6 +388,7 @@ export class StructuralValidator {
    * Check if an instance matches a pattern (all keys in pattern must match).
    */
   private matchesPattern(instance: Record<string, unknown>, pattern: unknown): boolean {
+
     if (!pattern || typeof pattern !== 'object') {
       return false;
     }
@@ -454,6 +451,7 @@ export class StructuralValidator {
    * Handles value[x] and other [x] choice types.
    */
   private getFieldValues(parent: Record<string, unknown>, field: string): unknown[] {
+
     // Handle choice types like value[x], deceased[x]
     if (field.endsWith('[x]')) {
       const prefix = field.replace('[x]', '');
@@ -489,6 +487,7 @@ export class StructuralValidator {
   // -------------------------------------------------------
 
   private validateCardinality(element: ElementDefinition, values: unknown[], path: string, resource: FhirResource): ValidationIssue[] {
+
     const parts = path.split('.');
 
     // For top-level elements, validate globally
@@ -521,6 +520,7 @@ export class StructuralValidator {
   }
 
   private checkCardinalityCounts(element: ElementDefinition, count: number, path: string): ValidationIssue[] {
+
     const issues: ValidationIssue[] = [];
 
     if (count < element.min) {
@@ -553,6 +553,7 @@ export class StructuralValidator {
   // -------------------------------------------------------
 
   private validateType(element: ElementDefinition, value: unknown, path: string): ValidationIssue[] {
+
     const issues: ValidationIssue[] = [];
 
     if (!element.type || element.type.length === 0) {
@@ -563,8 +564,10 @@ export class StructuralValidator {
     const typeValid = element.type.some(t => this.checkType(value, t.code));
 
     if (!typeValid) {
+
       const expected = element.type.map(t => t.code).join(' | ');
       const actual = typeof value;
+
       issues.push({
         severity: 'warning',
         path,
@@ -628,6 +631,7 @@ export class StructuralValidator {
   // -------------------------------------------------------
 
   private async validateBinding(element: ElementDefinition, value: unknown, path: string): Promise<ValidationIssue[]> {
+
     const issues: ValidationIssue[] = [];
     const binding = element.binding!;
 
@@ -674,8 +678,8 @@ export class StructuralValidator {
       );
 
       if (!result.valid) {
-        const severity =
-          binding.strength === 'required' ? 'error' : 'warning';
+
+        const severity =  binding.strength === 'required' ? 'error' : 'warning';
 
         issues.push({
           severity,
@@ -718,6 +722,7 @@ export class StructuralValidator {
   }
 
   private extractCodings(value: unknown): Coding[] {
+
     if (!value || typeof value !== 'object') {
       return [];
     }
@@ -742,6 +747,7 @@ export class StructuralValidator {
   // -------------------------------------------------------
 
   private validateFixedValues(element: ElementDefinition, value: unknown, path: string): ValidationIssue[] {
+
     const issues: ValidationIssue[] = [];
 
     if (element.fixedString !== undefined) {
@@ -793,6 +799,7 @@ export class StructuralValidator {
   // -------------------------------------------------------
 
   private validatePatternValues(element: ElementDefinition, value: unknown, path: string): ValidationIssue[] {
+
     const issues: ValidationIssue[] = [];
 
     if (element.patternCoding) {
@@ -834,6 +841,7 @@ export class StructuralValidator {
   // -------------------------------------------------------
 
   private validateConstraint(resource: object, constraint: ElementDefinitionConstraint, path: string): ValidationIssue[] {
+
     const {values, error} = this.fhirPath.evaluate(resource, constraint.expression);
 
     if (error) {
@@ -869,6 +877,7 @@ export class StructuralValidator {
   // -------------------------------------------------------
 
   private validateRequiredFields(resource: FhirResource, sd: StructureDefinition): ValidationIssue[] {
+
     const issues: ValidationIssue[] = [];
 
     if (!resource.resourceType) {

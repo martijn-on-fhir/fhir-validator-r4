@@ -8,7 +8,7 @@ import type {
   CodeValidationResult,
   BindingStrength
 } from '../types/fhir';
-import { NictizTerminologyClient, type NictizTerminologyConfig } from './nictiz-terminology-client';
+import {NictizTerminologyClient, type NictizTerminologyConfig} from './nictiz-terminology-client';
 
 /**
  * BSN elfproef (11-test) — validates Dutch citizen service numbers.
@@ -70,6 +70,7 @@ export interface TerminologyServiceOptions {
 }
 
 export class TerminologyService {
+
   private valueSets = new Map<string, ValueSet>();
   private codeSystems = new Map<string, CodeSystem>();
   private options: TerminologyServiceOptions;
@@ -96,6 +97,7 @@ export class TerminologyService {
    * Load all ValueSets and CodeSystems from a directory (recursive)
    */
   async loadFromDirectory(dirPath: string): Promise<void> {
+
     let entries: import('fs').Dirent[];
 
     try {
@@ -189,6 +191,7 @@ export class TerminologyService {
     const validator = PATTERN_VALIDATORS[system];
 
     if (validator) {
+
       const valid = typeof validator === 'function' ? validator(code) : validator.test(code);
 
       return {
@@ -274,6 +277,7 @@ export class TerminologyService {
   }
 
   private validateAgainstCodeSystem(code: string, cs: CodeSystem): CodeValidationResult {
+
     if (cs.content === 'not-present') {
       return {valid: true, message: 'CodeSystem has no local content'};
     }
@@ -291,7 +295,9 @@ export class TerminologyService {
   }
 
   private findInConcepts(code: string, concepts: CodeSystemConcept[]): CodeSystemConcept | undefined {
+
     for (const concept of concepts) {
+
       if (concept.code === code) {
         return concept;
       }
@@ -309,6 +315,7 @@ export class TerminologyService {
   }
 
   private isRateLimited(): boolean {
+
     const now = Date.now();
     const windowMs = 60_000;
     this.externalCallTimestamps = this.externalCallTimestamps.filter(t => now - t < windowMs);
@@ -317,6 +324,7 @@ export class TerminologyService {
   }
 
   private async validateExternal(system: string, code: string, valueSetUrl: string): Promise<CodeValidationResult> {
+
     const cacheKey = `${system}|${code}|${valueSetUrl}`;
 
     if (this.externalCache.has(cacheKey)) {
@@ -331,7 +339,9 @@ export class TerminologyService {
     }
 
     try {
+
       this.externalCallTimestamps.push(Date.now());
+
       const controller = new AbortController();
       const timeout = setTimeout(
         () => controller.abort(),
@@ -372,12 +382,13 @@ export class TerminologyService {
   }
 
   private async validateViaNictiz(system: string, code: string, valueSetUrl?: string): Promise<CodeValidationResult> {
+
     if (!this.nictizClient) {
-      return { valid: true, message: 'Nictiz client not configured' };
+      return {valid: true, message: 'Nictiz client not configured'};
     }
 
     if (this.isRateLimited()) {
-      return { valid: true, message: 'Nictiz validation skipped (rate limit reached)' };
+      return {valid: true, message: 'Nictiz validation skipped (rate limit reached)'};
     }
 
     this.externalCallTimestamps.push(Date.now());
@@ -395,6 +406,7 @@ export class TerminologyService {
    * Looks at compose.include[0].system of the ValueSet.
    */
   inferSystemFromValueSet(valueSetUrl: string): string | undefined {
+
     const vsUrlClean = valueSetUrl.split('|')[0];
     const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
 

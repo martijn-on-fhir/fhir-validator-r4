@@ -29,6 +29,7 @@ const DEFAULT_SYSTEM_VERSIONS: Record<string, string> = {
 };
 
 export class NictizTerminologyClient {
+
   private config: NictizTerminologyConfig;
   private token: OAuthToken | null = null;
   private cache = new Map<string, NictizValidationResult>();
@@ -52,7 +53,7 @@ export class NictizTerminologyClient {
 
     const res = await fetch(this.config.authUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body: body.toString(),
     });
 
@@ -71,6 +72,7 @@ export class NictizTerminologyClient {
   }
 
   async validateCode(system: string, code: string, valueSetUrl?: string): Promise<NictizValidationResult> {
+
     const cacheKey = `${system}|${code}|${valueSetUrl ?? ''}`;
 
     if (this.cache.has(cacheKey)) {
@@ -78,6 +80,7 @@ export class NictizTerminologyClient {
     }
 
     try {
+
       const accessToken = await this.authenticate();
 
       const systemVersion = this.config.systemVersions?.[system] ?? DEFAULT_SYSTEM_VERSIONS[system];
@@ -87,18 +90,18 @@ export class NictizTerminologyClient {
       if (valueSetUrl) {
         endpoint = `${this.config.baseUrl}/fhir/ValueSet/$validate-code`;
         body = this.buildParameters([
-          { name: 'url', valueUri: valueSetUrl.split('|')[0] },
-          { name: 'system', valueUri: system },
-          { name: 'code', valueCode: code },
-          ...(systemVersion ? [{ name: 'systemVersion', valueString: systemVersion }] : []),
+          {name: 'url', valueUri: valueSetUrl.split('|')[0]},
+          {name: 'system', valueUri: system},
+          {name: 'code', valueCode: code},
+          ...(systemVersion ? [{name: 'systemVersion', valueString: systemVersion}] : []),
         ]);
       } else {
         // Use $lookup for CodeSystem validation — more widely supported than $validate-code
         endpoint = `${this.config.baseUrl}/fhir/CodeSystem/$lookup`;
         body = this.buildParameters([
-          { name: 'system', valueUri: system },
-          { name: 'code', valueCode: code },
-          ...(systemVersion ? [{ name: 'version', valueString: systemVersion }] : []),
+          {name: 'system', valueUri: system},
+          {name: 'code', valueCode: code},
+          ...(systemVersion ? [{name: 'version', valueString: systemVersion}] : []),
         ]);
       }
 
@@ -121,8 +124,9 @@ export class NictizTerminologyClient {
       let result: NictizValidationResult;
 
       if (!res.ok) {
+
         if (valueSetUrl) {
-          return { valid: true, message: `Nictiz server returned ${res.status}, validation skipped` };
+          return {valid: true, message: `Nictiz server returned ${res.status}, validation skipped`};
         }
 
         // $lookup error — distinguish "code not found" from "system unavailable"
@@ -130,26 +134,28 @@ export class NictizTerminologyClient {
         const systemUnavailable = diag.includes('Could not find the code system') || diag.includes('could not be found');
 
         if (systemUnavailable) {
-          result = { valid: true, message: `CodeSystem ${system} not available on Nictiz, validation skipped` };
+          result = {valid: true, message: `CodeSystem ${system} not available on Nictiz, validation skipped`};
         } else {
-          result = { valid: false, message: diag || `Code not found in ${system}` };
+          result = {valid: false, message: diag || `Code not found in ${system}`};
         }
       } else if (!valueSetUrl) {
         // $lookup success — the code exists, extract display name
         const displayParam = data.parameter?.find(p => p.name === 'display');
-        result = { valid: true, display: displayParam?.valueString };
+        result = {valid: true, display: displayParam?.valueString};
       } else {
         // $validate-code success — check the result parameter
         const resultParam = data.parameter?.find(p => p.name === 'result');
         const displayParam = data.parameter?.find(p => p.name === 'display');
         const messageParam = data.parameter?.find(p => p.name === 'message');
-        result = { valid: resultParam?.valueBoolean === true, display: displayParam?.valueString, message: messageParam?.valueString };
+
+        result = {valid: resultParam?.valueBoolean === true, display: displayParam?.valueString, message: messageParam?.valueString};
       }
 
       this.cache.set(cacheKey, result);
 
       return result;
     } catch (e) {
+
       return {
         valid: true,
         message: `Nictiz terminology validation failed: ${(e as Error).message}`,
@@ -161,8 +167,9 @@ export class NictizTerminologyClient {
     return {
       resourceType: 'Parameters',
       parameter: params.map(p => {
-        const { name, ...rest } = p;
-        return { name, ...rest };
+        const {name, ...rest} = p;
+
+        return {name, ...rest};
       }),
     };
   }
