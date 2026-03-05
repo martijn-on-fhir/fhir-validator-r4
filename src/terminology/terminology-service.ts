@@ -1,4 +1,4 @@
-// src/terminology/TerminologyService.ts
+// src/terminology/terminology-service.ts
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type {

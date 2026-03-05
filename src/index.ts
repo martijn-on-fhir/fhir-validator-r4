@@ -1,9 +1,9 @@
 // src/index.ts
-export { FhirValidator } from './validator/FhirValidator';
-export { StructureDefinitionRegistry } from './registry/StructureDefinitionRegistry';
-export { TerminologyService } from './terminology/TerminologyService';
-export { FhirPathEngine } from './fhirpath/FhirPathEngine';
-export { StructuralValidator } from './structural/StructuralValidator';
+export { FhirValidator } from './validator/fhir-validator';
+export { StructureDefinitionRegistry } from './registry/structure-definition-registry';
+export { TerminologyService } from './terminology/terminology-service';
+export { FhirPathEngine } from './fhirpath/fhir-path-engine';
+export { StructuralValidator } from './structural/structural-validator';
 export type {
   ValidationResult,
   ValidationIssue,

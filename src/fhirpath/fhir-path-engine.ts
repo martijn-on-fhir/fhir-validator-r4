@@ -1,4 +1,4 @@
-// src/fhirpath/FhirPathEngine.ts
+// src/fhirpath/fhir-path-engine.ts
 import fhirpath, { type Model } from 'fhirpath';
 
 // Try to load the R4 model

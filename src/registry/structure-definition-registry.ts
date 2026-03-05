@@ -1,4 +1,4 @@
-// src/registry/StructureDefinitionRegistry.ts
+// src/registry/structure-definition-registry.ts
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { StructureDefinition, ElementDefinition } from '../types/fhir';

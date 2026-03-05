@@ -1,9 +1,9 @@
-// src/validator/FhirValidator.ts
+// src/validator/fhir-validator.ts
 import type { ValidationResult, ValidationIssue } from '../types/fhir';
-import { StructureDefinitionRegistry } from '../registry/StructureDefinitionRegistry';
-import { TerminologyService, type TerminologyServiceOptions } from '../terminology/TerminologyService';
-import { FhirPathEngine } from '../fhirpath/FhirPathEngine';
-import { StructuralValidator } from '../structural/StructuralValidator';
+import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
+import { TerminologyService, type TerminologyServiceOptions } from '../terminology/terminology-service';
+import { FhirPathEngine } from '../fhirpath/fhir-path-engine';
+import { StructuralValidator } from '../structural/structural-validator';
 
 export interface FhirValidatorOptions {
   /** Directories with StructureDefinition JSON files (loaded in order) */

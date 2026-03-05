@@ -1,4 +1,4 @@
-// src/structural/StructuralValidator.ts
+// src/structural/structural-validator.ts
 import type {
   StructureDefinition,
   ElementDefinition,
@@ -8,9 +8,9 @@ import type {
   Coding,
   BindingStrength
 } from '../types/fhir';
-import type { StructureDefinitionRegistry } from '../registry/StructureDefinitionRegistry';
-import type { TerminologyService } from '../terminology/TerminologyService';
-import type { FhirPathEngine } from '../fhirpath/FhirPathEngine';
+import type { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
+import type { TerminologyService } from '../terminology/terminology-service';
+import type { FhirPathEngine } from '../fhirpath/fhir-path-engine';
 
 type FhirResource = Record<string, unknown>;
 

@@ -22,11 +22,11 @@ FHIR Validator for Mexico (fhir-validator-mx) — a TypeScript/Node.js project f
 src/
   index.ts                          — Public exports
   types/fhir.ts                     — Core FHIR R4 type definitions
-  fhirpath/FhirPathEngine.ts        — FHIRPath expression evaluator (wraps fhirpath lib)
-  registry/StructureDefinitionRegistry.ts — Loads & resolves StructureDefinition profiles
-  terminology/TerminologyService.ts — Validates codes against ValueSets/CodeSystems
-  structural/StructuralValidator.ts — Core validation: cardinality, types, bindings, constraints
-  validator/FhirValidator.ts        — Public facade with factory create() method
+  fhirpath/fhir-path-engine.ts        — FHIRPath expression evaluator (wraps fhirpath lib)
+  registry/structure-definition-registry.ts — Loads & resolves StructureDefinition profiles
+  terminology/terminology-service.ts — Validates codes against ValueSets/CodeSystems
+  structural/structural-validator.ts — Core validation: cardinality, types, bindings, constraints
+  validator/fhir-validator.ts        — Public facade with factory create() method
 tests/
   validator.test.ts                 — Unit tests
 ```
