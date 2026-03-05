@@ -1,0 +1,10 @@
+{
+  "terminology": {
+    "baseUrl": "https://terminologieserver.nl",
+    "authUrl": "https://terminologieserver.nl/authorisation/auth/realms/nictiz/protocol/openid-connect/token",
+    "user": "your-email@example.com",
+    "password": "your-password",
+    "clientId": "cli_client",
+    "grantType": "password"
+  }
+}

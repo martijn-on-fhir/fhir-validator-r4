@@ -208,6 +208,10 @@ export interface ValidationResult {
   issues: ValidationIssue[];
   resourceType?: string;
   profile?: string;
+  /** Unique identifier for this validation run */
+  validationId?: string;
+  /** ISO 8601 timestamp of when validation was performed */
+  timestamp?: string;
 }
 
 export interface CodeValidationResult {

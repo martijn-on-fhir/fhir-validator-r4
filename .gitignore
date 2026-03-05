@@ -2,3 +2,9 @@ node_modules/
 dist/
 .idea/
 *.js.map
+
+# Local config with credentials — NEVER commit
+config.local.json
+config.local.*.json
+.env
+.env.*

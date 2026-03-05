@@ -8,13 +8,34 @@ import type {
   CodeValidationResult,
   BindingStrength
 } from '../types/fhir';
+import { NictizTerminologyClient, type NictizTerminologyConfig } from './nictiz-terminology-client';
 
-// Known systems validated by pattern
-const PATTERN_VALIDATORS: Record<string, RegExp> = {
+/**
+ * BSN elfproef (11-test) — validates Dutch citizen service numbers.
+ * A BSN is valid when: (9*d1 + 8*d2 + 7*d3 + ... + 2*d8 - 1*d9) % 11 === 0 and result > 0
+ */
+const isValidBsn = (code: string): boolean => {
+  if (!/^\d{9}$/.test(code)) {
+    return false;
+  }
+
+  const digits = code.split('').map(Number);
+  const sum =
+    9 * digits[0] + 8 * digits[1] + 7 * digits[2] +
+    6 * digits[3] + 5 * digits[4] + 4 * digits[5] +
+    3 * digits[6] + 2 * digits[7] - 1 * digits[8];
+
+  return sum > 0 && sum % 11 === 0;
+};
+
+// Known systems validated by pattern or custom function
+type PatternValidator = RegExp | ((code: string) => boolean);
+
+const PATTERN_VALIDATORS: Record<string, PatternValidator> = {
   'http://snomed.info/sct': /^\d{6,18}$/,
   'http://loinc.org': /^\d{1,5}-\d$/,
   'http://www.nlm.nih.gov/research/umls/rxnorm': /^\d+$/,
-  'http://fhir.nl/fhir/NamingSystem/bsn': /^\d{9}$/,
+  'http://fhir.nl/fhir/NamingSystem/bsn': isValidBsn,
   'http://fhir.nl/fhir/NamingSystem/agb-z': /^\d{8}$/,
   'http://fhir.nl/fhir/NamingSystem/uzi-nr-systems': /^\d+$/,
   'http://hl7.org/fhir/sid/us-npi': /^\d{10}$/,
@@ -40,21 +61,35 @@ export interface TerminologyServiceOptions {
   externalTxServer?: string;
   /** Timeout for external calls in ms */
   externalTimeoutMs?: number;
+  /** Block all external terminology calls (for strict local-only validation) */
+  disableExternalCalls?: boolean;
+  /** Max external requests per minute (rate limiting) */
+  externalRateLimit?: number;
+  /** Nictiz terminologieserver credentials (loaded from config.local.json) */
+  nictiz?: NictizTerminologyConfig;
 }
 
 export class TerminologyService {
   private valueSets = new Map<string, ValueSet>();
   private codeSystems = new Map<string, CodeSystem>();
   private options: TerminologyServiceOptions;
+  private nictizClient: NictizTerminologyClient | null = null;
 
   // Cache for external lookups
   private externalCache = new Map<string, CodeValidationResult>();
+  // Rate limiting state
+  private externalCallTimestamps: number[] = [];
 
   constructor(options: TerminologyServiceOptions = {}) {
     this.options = {
       externalTimeoutMs: 5000,
+      externalRateLimit: 30,
       ...options
     };
+
+    if (options.nictiz) {
+      this.nictizClient = new NictizTerminologyClient(options.nictiz);
+    }
   }
 
   /**
@@ -115,11 +150,23 @@ export class TerminologyService {
       const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
 
       if (vs) {
-        return this.validateAgainstValueSet(system, code, vs);
+        const localResult = this.validateAgainstValueSet(system, code, vs);
+
+        // If local validation fails and Nictiz is available, try Nictiz as second opinion
+        if (!localResult.valid && this.nictizClient && !this.options.disableExternalCalls) {
+          return this.validateViaNictiz(system, code, valueSetUrl);
+        }
+
+        return localResult;
       }
 
-      // Fallback to external server
-      if (this.options.externalTxServer) {
+      // Fallback to Nictiz terminologieserver (if configured)
+      if (this.nictizClient && !this.options.disableExternalCalls) {
+        return this.validateViaNictiz(system, code, valueSetUrl);
+      }
+
+      // Fallback to generic external server (if allowed)
+      if (this.options.externalTxServer && !this.options.disableExternalCalls) {
         return this.validateExternal(system, code, valueSetUrl);
       }
 
@@ -138,14 +185,14 @@ export class TerminologyService {
     }
 
     // 3. Pattern validation for known systems
-    const pattern = PATTERN_VALIDATORS[system];
+    const validator = PATTERN_VALIDATORS[system];
 
-    if (pattern) {
-      const valid = pattern.test(code);
+    if (validator) {
+      const valid = typeof validator === 'function' ? validator(code) : validator.test(code);
 
       return {
         valid,
-        message: valid ? undefined : `Code '${code}' does not match the pattern for ${system}`
+        message: valid ? undefined : `Code does not match the expected format for ${system}`
       };
     }
 
@@ -154,7 +201,12 @@ export class TerminologyService {
       return {valid: true};
     }
 
-    // 5. Unknown system
+    // 5. Nictiz terminologieserver for unknown systems
+    if (this.nictizClient && !this.options.disableExternalCalls) {
+      return this.validateViaNictiz(system, code);
+    }
+
+    // 6. Unknown system
     return {
       valid: true,
       message: `System '${system}' not locally available, validation skipped`
@@ -173,7 +225,7 @@ export class TerminologyService {
         return {valid: true, display: found.display};
       }
 
-      return {valid: false, message: `Code ${system}|${code} not in expansion of ${vs.url}`};
+      return {valid: false, message: `Code not found in expansion of ${vs.url}`};
     }
 
     // Compose-based validation
@@ -216,7 +268,7 @@ export class TerminologyService {
 
     return {
       valid: false,
-      message: `Code ${system}|${code} not found in ValueSet ${vs.url}`
+      message: `Code not found in ValueSet ${vs.url}`
     };
   }
 
@@ -233,7 +285,7 @@ export class TerminologyService {
 
     return {
       valid: false,
-      message: `Code '${code}' not found in CodeSystem ${cs.url}`
+      message: `Code not found in CodeSystem ${cs.url}`
     };
   }
 
@@ -255,6 +307,14 @@ export class TerminologyService {
     return undefined;
   }
 
+  private isRateLimited(): boolean {
+    const now = Date.now();
+    const windowMs = 60_000;
+    this.externalCallTimestamps = this.externalCallTimestamps.filter(t => now - t < windowMs);
+
+    return this.externalCallTimestamps.length >= (this.options.externalRateLimit ?? 30);
+  }
+
   private async validateExternal(system: string, code: string, valueSetUrl: string): Promise<CodeValidationResult> {
     const cacheKey = `${system}|${code}|${valueSetUrl}`;
 
@@ -262,7 +322,15 @@ export class TerminologyService {
       return this.externalCache.get(cacheKey)!;
     }
 
+    if (this.isRateLimited()) {
+      return {
+        valid: true,
+        message: 'External terminology validation skipped (rate limit reached)'
+      };
+    }
+
     try {
+      this.externalCallTimestamps.push(Date.now());
       const controller = new AbortController();
       const timeout = setTimeout(
         () => controller.abort(),
@@ -302,11 +370,46 @@ export class TerminologyService {
     }
   }
 
-  stats(): { valueSets: number; codeSystems: number; cachedLookups: number } {
+  private async validateViaNictiz(system: string, code: string, valueSetUrl?: string): Promise<CodeValidationResult> {
+    if (!this.nictizClient) {
+      return { valid: true, message: 'Nictiz client not configured' };
+    }
+
+    if (this.isRateLimited()) {
+      return { valid: true, message: 'Nictiz validation skipped (rate limit reached)' };
+    }
+
+    this.externalCallTimestamps.push(Date.now());
+    const result = await this.nictizClient.validateCode(system, code, valueSetUrl);
+
+    return {
+      valid: result.valid,
+      display: result.display,
+      message: result.message,
+    };
+  }
+
+  /**
+   * Infer the code system URL from a loaded ValueSet.
+   * Looks at compose.include[0].system of the ValueSet.
+   */
+  inferSystemFromValueSet(valueSetUrl: string): string | undefined {
+    const vsUrlClean = valueSetUrl.split('|')[0];
+    const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
+
+    if (!vs) {
+      return undefined;
+    }
+
+    return vs.compose?.include?.[0]?.system;
+  }
+
+  stats(): { valueSets: number; codeSystems: number; cachedLookups: number; nictizConfigured: boolean } {
     return {
       valueSets: this.valueSets.size,
       codeSystems: this.codeSystems.size,
-      cachedLookups: this.externalCache.size
+      cachedLookups: this.externalCache.size + (this.nictizClient?.cacheSize ?? 0),
+      nictizConfigured: this.nictizClient !== null,
     };
   }
 }

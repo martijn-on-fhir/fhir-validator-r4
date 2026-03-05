@@ -14,6 +14,12 @@ import type {
 
 type FhirResource = Record<string, unknown>;
 
+// FHIR R4 date/time format patterns
+const FHIR_DATE_RE = /^\d{4}(-\d{2}(-\d{2})?)?$/;
+const FHIR_DATETIME_RE = /^\d{4}(-\d{2}(-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?)?)?$/;
+const FHIR_TIME_RE = /^\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+const FHIR_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
 interface SliceMatchInfo {
   discriminatorType: string;
   discriminatorPath: string;
@@ -591,11 +597,14 @@ export class StructuralValidator {
         return typeof value === 'number' && Number.isInteger(value);
       case 'decimal':
         return typeof value === 'number';
-      case 'dateTime':
       case 'date':
+        return typeof value === 'string' && FHIR_DATE_RE.test(value);
+      case 'dateTime':
+        return typeof value === 'string' && FHIR_DATETIME_RE.test(value);
       case 'time':
+        return typeof value === 'string' && FHIR_TIME_RE.test(value);
       case 'instant':
-        return typeof value === 'string'; // Further pattern validation possible
+        return typeof value === 'string' && FHIR_INSTANT_RE.test(value);
       case 'Coding':
       case 'CodeableConcept':
       case 'Reference':
@@ -637,7 +646,7 @@ export class StructuralValidator {
           const severity = binding.strength === 'required' ? 'error' : 'warning';
           issues.push({
             severity, path, code: 'CODE_INVALID',
-            message: `Invalid code: '${value}'. ${result.message ?? ''}`
+            message: `Invalid code value for '${path}'. ${result.message ?? ''}`
           });
         }
       }
@@ -672,7 +681,7 @@ export class StructuralValidator {
           severity,
           path,
           code: 'CODE_INVALID',
-          message: `Invalid code: ${coding.system}|${coding.code}. ${result.message ?? ''}`
+          message: `Invalid code for '${path}'. ${result.message ?? ''}`
         });
       }
     }
@@ -681,25 +690,28 @@ export class StructuralValidator {
   }
 
   /**
-   * Infer the code system from a ValueSet URL for plain code types
+   * Infer the code system from a ValueSet URL for plain code types.
+   * Uses dynamic lookup from loaded ValueSets, with known mappings as fallback.
    */
   private inferSystemFromValueSet(valueSetUrl?: string): string | undefined {
     if (!valueSetUrl) {
       return undefined;
     }
 
-    // Known mappings from ValueSet URL to system
+    // Dynamic: look up from loaded ValueSets
+    const dynamic = this.terminology.inferSystemFromValueSet(valueSetUrl);
+
+    if (dynamic) {
+      return dynamic;
+    }
+
+    // Static fallback for common FHIR ValueSets
     const mappings: Record<string, string> = {
-      'http://hl7.org/fhir/ValueSet/administrative-gender':
-        'http://hl7.org/fhir/administrative-gender',
-      'http://hl7.org/fhir/ValueSet/name-use':
-        'http://hl7.org/fhir/name-use',
-      'http://hl7.org/fhir/ValueSet/address-use':
-        'http://hl7.org/fhir/address-use',
-      'http://hl7.org/fhir/ValueSet/contact-point-system':
-        'http://hl7.org/fhir/contact-point-system',
-      'http://hl7.org/fhir/ValueSet/observation-status':
-        'http://hl7.org/fhir/observation-status',
+      'http://hl7.org/fhir/ValueSet/administrative-gender': 'http://hl7.org/fhir/administrative-gender',
+      'http://hl7.org/fhir/ValueSet/name-use': 'http://hl7.org/fhir/name-use',
+      'http://hl7.org/fhir/ValueSet/address-use': 'http://hl7.org/fhir/address-use',
+      'http://hl7.org/fhir/ValueSet/contact-point-system': 'http://hl7.org/fhir/contact-point-system',
+      'http://hl7.org/fhir/ValueSet/observation-status': 'http://hl7.org/fhir/observation-status',
     };
 
     return mappings[valueSetUrl.split('|')[0]];

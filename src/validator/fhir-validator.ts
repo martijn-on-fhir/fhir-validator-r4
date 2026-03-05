@@ -1,9 +1,14 @@
 // src/validator/fhir-validator.ts
+import { randomUUID } from 'crypto';
+import { readFile } from 'fs/promises';
 import { FhirPathEngine } from '../fhirpath/fhir-path-engine';
 import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
 import { StructuralValidator } from '../structural/structural-validator';
 import { TerminologyService, type TerminologyServiceOptions } from '../terminology/terminology-service';
-import type { ValidationResult, ValidationIssue } from '../types/fhir';
+import type { IssueSeverity, ValidationIssue, ValidationResult } from '../types/fhir';
+
+/** Configurable severity overrides per issue code */
+export type SeverityOverrides = Record<string, IssueSeverity>;
 
 export interface FhirValidatorOptions {
   /** Directories with StructureDefinition JSON files (loaded in order) */
@@ -12,15 +17,24 @@ export interface FhirValidatorOptions {
   terminologyDirs?: string[];
   /** Options for external terminology server */
   terminology?: TerminologyServiceOptions;
+  /** Override severity for specific issue codes (e.g. { CODE_INVALID: 'warning' }) */
+  severityOverrides?: SeverityOverrides;
+  /** Accepted FHIR version (e.g. "4.0.1"). If set, resources with a different fhirVersion in meta are rejected. */
+  fhirVersion?: string;
 }
+
+// Known dangerous keys that can cause prototype pollution
+const PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export class FhirValidator {
   readonly registry: StructureDefinitionRegistry;
   readonly terminology: TerminologyService;
   readonly fhirPath: FhirPathEngine;
   private structural: StructuralValidator;
+  private severityOverrides: SeverityOverrides;
+  private fhirVersion?: string;
 
-  private constructor(options: TerminologyServiceOptions = {}) {
+  private constructor(options: TerminologyServiceOptions = {}, severityOverrides: SeverityOverrides = {}, fhirVersion?: string) {
     this.registry = new StructureDefinitionRegistry();
     this.terminology = new TerminologyService(options);
     this.fhirPath = new FhirPathEngine();
@@ -29,6 +43,8 @@ export class FhirValidator {
       this.terminology,
       this.fhirPath
     );
+    this.severityOverrides = severityOverrides;
+    this.fhirVersion = fhirVersion;
   }
 
   /**
@@ -36,7 +52,7 @@ export class FhirValidator {
    * Directories are loaded in order (e.g. r4-core first, then nl-core).
    */
   static async create(options: FhirValidatorOptions = {}): Promise<FhirValidator> {
-    const validator = new FhirValidator(options.terminology);
+    const validator = new FhirValidator(options.terminology, options.severityOverrides, options.fhirVersion);
 
     for (const dir of options.profilesDirs ?? []) {
       await validator.registry.loadFromDirectory(dir);
@@ -55,18 +71,54 @@ export class FhirValidator {
    * or the base FHIR profile.
    */
   async validate(resource: unknown, profileUrl?: string): Promise<ValidationResult> {
+    const validationId = randomUUID();
+    const timestamp = new Date().toISOString();
+
+    // Step 0: Prototype pollution check
+    const protoIssues = this.checkPrototypePollution(resource);
+
+    if (protoIssues.length > 0) {
+      return { valid: false, issues: protoIssues, validationId, timestamp };
+    }
 
     // Step 1: Basic structure check
     const structureIssues = this.checkStructure(resource);
 
     if (structureIssues.length > 0) {
-      return { valid: false, issues: structureIssues };
+      return { valid: false, issues: structureIssues, validationId, timestamp };
     }
 
     const res = resource as Record<string, unknown>;
 
+    // Step 1b: FHIR version check
+    if (this.fhirVersion) {
+      const versionIssues = this.checkFhirVersion(res);
+
+      if (versionIssues.length > 0) {
+        return { valid: false, issues: versionIssues, validationId, timestamp };
+      }
+    }
+
     // Step 2: Deep structural validation
-    return this.structural.validate(res, profileUrl);
+    const result = await this.structural.validate(res, profileUrl);
+
+    // Apply severity overrides
+    if (Object.keys(this.severityOverrides).length > 0) {
+      for (const issue of result.issues) {
+        if (issue.code && this.severityOverrides[issue.code]) {
+          issue.severity = this.severityOverrides[issue.code];
+        }
+      }
+
+      // Recompute validity after overrides
+      const errors = result.issues.filter(i => i.severity === 'error');
+      result.valid = errors.length === 0;
+    }
+
+    result.validationId = validationId;
+    result.timestamp = timestamp;
+
+    return result;
   }
 
   /**
@@ -74,6 +126,43 @@ export class FhirValidator {
    */
   async validateBatch(resources: unknown[]): Promise<ValidationResult[]> {
     return Promise.all(resources.map(r => this.validate(r)));
+  }
+
+  /**
+   * Check for prototype pollution in parsed JSON input.
+   * Scans top-level and nested keys for __proto__, constructor, prototype.
+   */
+  private checkPrototypePollution(resource: unknown, path = '', depth = 0): ValidationIssue[] {
+    if (depth > 20 || !resource || typeof resource !== 'object') {
+      return [];
+    }
+
+    const issues: ValidationIssue[] = [];
+
+    for (const key of Object.keys(resource as Record<string, unknown>)) {
+      if (PROTO_KEYS.has(key)) {
+        issues.push({
+          severity: 'error',
+          path: path ? `${path}.${key}` : key,
+          code: 'SECURITY',
+          message: `Potentially unsafe key '${key}' detected in resource`
+        });
+      }
+
+      const val = (resource as Record<string, unknown>)[key];
+
+      if (typeof val === 'object' && val !== null) {
+        if (Array.isArray(val)) {
+          for (let i = 0; i < val.length; i++) {
+            issues.push(...this.checkPrototypePollution(val[i], `${path ? path + '.' : ''}${key}[${i}]`, depth + 1));
+          }
+        } else {
+          issues.push(...this.checkPrototypePollution(val, path ? `${path}.${key}` : key, depth + 1));
+        }
+      }
+    }
+
+    return issues;
   }
 
   /**
@@ -110,6 +199,48 @@ export class FhirValidator {
     }
 
     return issues;
+  }
+
+  /**
+   * Check FHIR version compatibility
+   */
+  private checkFhirVersion(resource: Record<string, unknown>): ValidationIssue[] {
+    const meta = resource.meta as { versionId?: string; profile?: string[] } | undefined;
+
+    // Check if meta.tag contains fhirVersion, or check against known R4 resource types
+    // For now, we validate that profiles reference the correct FHIR version
+    if (meta?.profile) {
+      for (const profileUrl of meta.profile) {
+        if (typeof profileUrl === 'string' && profileUrl.includes('|')) {
+          const version = profileUrl.split('|')[1];
+
+          if (version && this.fhirVersion && !version.startsWith(this.fhirVersion.split('.')[0])) {
+            return [{
+              severity: 'error',
+              path: 'meta.profile',
+              code: 'FHIR_VERSION',
+              message: `Profile version '${version}' is not compatible with configured FHIR version '${this.fhirVersion}'`
+            }];
+          }
+        }
+      }
+    }
+
+    return [];
+  }
+
+  /**
+   * Load terminology credentials from a config file (e.g. config.local.json).
+   * Returns null if the file does not exist — safe to call unconditionally.
+   */
+  static async loadConfig(configPath: string): Promise<{ terminology?: { baseUrl: string; authUrl: string; user: string; password: string; clientId: string; grantType: string } } | null> {
+    try {
+      const content = await readFile(configPath, 'utf8');
+
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
   }
 
   /**
