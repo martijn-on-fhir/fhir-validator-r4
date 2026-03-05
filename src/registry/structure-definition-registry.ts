@@ -20,10 +20,13 @@ export class StructureDefinitionRegistry {
         continue;
       }
 
-      if (!entry.name.endsWith('.json')) continue;
+      if (!entry.name.endsWith('.json')) {
+continue;
+}
 
       try {
         const content = JSON.parse(await fs.readFile(fullPath, 'utf8'));
+
         if (content.resourceType === 'StructureDefinition') {
           this.register(content as StructureDefinition);
         }
@@ -38,8 +41,14 @@ export class StructureDefinitionRegistry {
    */
   register(sd: StructureDefinition): void {
     this.definitions.set(sd.url, sd);
-    if (sd.name) this.definitions.set(sd.name, sd);
-    if (sd.id) this.definitions.set(sd.id, sd);
+
+    if (sd.name) {
+this.definitions.set(sd.name, sd);
+}
+
+    if (sd.id) {
+this.definitions.set(sd.id, sd);
+}
   }
 
   /**
@@ -48,6 +57,7 @@ export class StructureDefinitionRegistry {
   resolve(urlOrName: string): StructureDefinition | undefined {
     // Strip version suffix if present: url|4.0.1 -> url
     const clean = urlOrName.split('|')[0];
+
     return this.definitions.get(clean);
   }
 
@@ -64,6 +74,7 @@ export class StructureDefinitionRegistry {
     }
 
     const base = this.resolve(sd.baseDefinition);
+
     if (!base) {
       return [...ownElements];
     }

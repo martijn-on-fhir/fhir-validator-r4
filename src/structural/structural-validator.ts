@@ -1,4 +1,7 @@
 // src/structural/structural-validator.ts
+import type {FhirPathEngine} from '../fhirpath/fhir-path-engine';
+import type {StructureDefinitionRegistry} from '../registry/structure-definition-registry';
+import type {TerminologyService} from '../terminology/terminology-service';
 import type {
   StructureDefinition,
   ElementDefinition,
@@ -8,23 +11,21 @@ import type {
   Coding,
   BindingStrength
 } from '../types/fhir';
-import type { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
-import type { TerminologyService } from '../terminology/terminology-service';
-import type { FhirPathEngine } from '../fhirpath/fhir-path-engine';
 
 type FhirResource = Record<string, unknown>;
 
-export class StructuralValidator {
-  constructor(
-    private registry: StructureDefinitionRegistry,
-    private terminology: TerminologyService,
-    private fhirPath: FhirPathEngine
-  ) {}
+interface SliceMatchInfo {
+  discriminatorType: string;
+  discriminatorPath: string;
+  matchValue: unknown;
+  sliceElement: ElementDefinition;
+}
 
-  async validate(
-    resource: FhirResource,
-    profileUrl?: string
-  ): Promise<ValidationResult> {
+export class StructuralValidator {
+  constructor(private registry: StructureDefinitionRegistry, private terminology: TerminologyService, private fhirPath: FhirPathEngine) {
+  }
+
+  async validate(resource: FhirResource, profileUrl?: string): Promise<ValidationResult> {
     const issues: ValidationIssue[] = [];
 
     // Determine which profile to validate against
@@ -35,6 +36,7 @@ export class StructuralValidator {
       `http://hl7.org/fhir/StructureDefinition/${resource.resourceType}`;
 
     const sd = this.registry.resolve(url);
+
     if (!sd) {
       return {
         valid: false,
@@ -53,45 +55,52 @@ export class StructuralValidator {
     // Validate root-level elements
     issues.push(...this.validateRequiredFields(resource, sd));
 
+    // Build slice matching info
+    const sliceMap = this.buildSliceMap(elements);
+
     // Validate each element from the profile
     for (const element of elements) {
       // Skip the root element itself (e.g. "Patient")
-      if (!element.path.includes('.')) continue;
+      if (!element.path.includes('.')) {
+        continue;
+      }
 
       // Compute the path relative to the resource root
       const relPath = element.path.substring(element.path.indexOf('.') + 1);
+      const elementId = element.id ?? '';
 
-      // Get the values for this path
-      const values = this.fhirPath.getValues(resource, relPath);
+      if (this.hasSliceContext(elementId)) {
+        // --- Slice-aware validation ---
+        issues.push(
+          ...await this.validateSlicedElement(resource, element, relPath, sliceMap)
+        );
+      } else {
+        // --- Non-sliced validation (existing logic) ---
+        const values = this.fhirPath.getValues(resource, relPath);
 
-      // --- Cardinality ---
-      issues.push(...this.validateCardinality(element, values, relPath));
+        issues.push(...this.validateCardinality(element, values, relPath, resource));
 
-      // --- Per-value validations ---
-      for (const value of values) {
-        if (value === null || value === undefined) continue;
+        for (const value of values) {
+          if (value === null || value === undefined) {
+            continue;
+          }
 
-        // Type validation
-        issues.push(...this.validateType(element, value, relPath));
+          issues.push(...this.validateType(element, value, relPath));
 
-        // Terminology binding
-        if (element.binding) {
-          const termIssues = await this.validateBinding(element, value, relPath);
-          issues.push(...termIssues);
+          if (element.binding) {
+            issues.push(...await this.validateBinding(element, value, relPath));
+          }
+
+          issues.push(...this.validateFixedValues(element, value, relPath));
+          issues.push(...this.validatePatternValues(element, value, relPath));
         }
 
-        // Fixed values
-        issues.push(...this.validateFixedValues(element, value, relPath));
-
-        // Pattern values
-        issues.push(...this.validatePatternValues(element, value, relPath));
-      }
-
-      // --- FHIRPath constraints ---
-      for (const constraint of element.constraint ?? []) {
-        issues.push(
-          ...this.validateConstraint(resource, constraint, relPath)
-        );
+        // FHIRPath constraints only apply when the element is present or required
+        if (values.length > 0 || element.min > 0) {
+          for (const constraint of element.constraint ?? []) {
+            issues.push(...this.validateConstraint(resource, constraint, relPath));
+          }
+        }
       }
     }
 
@@ -106,16 +115,407 @@ export class StructuralValidator {
   }
 
   // -------------------------------------------------------
+  // Slicing
+  // -------------------------------------------------------
+
+  /**
+   * Build a map of slice element ids to their matching info.
+   * For each slice, determines how to match resource instances
+   * using the parent's discriminator definition.
+   */
+  private buildSliceMap(elements: ElementDefinition[]): Map<string, SliceMatchInfo> {
+    const map = new Map<string, SliceMatchInfo>();
+
+    // Collect elements that define slicing
+    const slicingDefs = new Map<string, ElementDefinition>();
+
+    for (const el of elements) {
+      if (el.slicing && el.id) {
+        slicingDefs.set(el.id, el);
+      }
+    }
+
+    for (const el of elements) {
+      if (!el.sliceName || !el.id) {
+        continue;
+      }
+
+      // Find the parent element that defines slicing
+      const parentId = this.getSliceParentId(el.id);
+      const parentEl = slicingDefs.get(parentId);
+      const disc = parentEl?.slicing?.discriminator?.[0];
+
+      if (!disc) {
+        continue;
+      }
+
+      let matchValue: unknown;
+
+      if (disc.type === 'value') {
+        if (disc.path === 'url') {
+          // Extension slicing: look for fixedUri on child .url element
+          const urlChild = elements.find(e => e.id === el.id + '.url');
+          matchValue = urlChild?.fixedUri;
+        } else if (disc.path === '$this') {
+          // Pattern on the slice element itself
+          matchValue = el.patternIdentifier || el.patternCoding || el.patternCodeableConcept;
+        } else {
+          // Match by a specific field (use, system, code, etc.)
+          // Check for fixed value on the child element
+          const child = elements.find(e => e.id === el.id + '.' + disc.path);
+          matchValue = child?.fixedCode ?? child?.fixedString ?? child?.fixedUri;
+
+          // Fallback: check for pattern on the slice element itself
+          if (matchValue === undefined) {
+            matchValue = this.getNestedValue(
+              el as unknown as Record<string, unknown>, disc.path
+            );
+          }
+        }
+      } else if (disc.type === 'type' && disc.path === '$this') {
+        // Match by type
+        matchValue = el.type?.[0]?.code;
+      } else if (disc.type === 'pattern') {
+        if (disc.path === '$this') {
+          matchValue = el.patternCoding || el.patternCodeableConcept || el.patternIdentifier;
+        }
+      }
+      // 'profile' and 'exists' discriminators: matchValue stays undefined → accept all
+
+      map.set(el.id, {
+        discriminatorType: disc.type,
+        discriminatorPath: disc.path,
+        matchValue,
+        sliceElement: el,
+      });
+    }
+
+    return map;
+  }
+
+  /**
+   * Check if an element id contains slice context (has ':' in segments after the resource type).
+   */
+  private hasSliceContext(elementId: string): boolean {
+    const dotIdx = elementId.indexOf('.');
+
+    if (dotIdx < 0) {
+      return false;
+    }
+
+    return elementId.substring(dotIdx + 1).includes(':');
+  }
+
+  /**
+   * Get the parent element id for a slice.
+   * e.g., "Patient.extension:nationality" → "Patient.extension"
+   * e.g., "Patient.extension:nationality.extension:code" → "Patient.extension:nationality.extension"
+   */
+  private getSliceParentId(sliceId: string): string {
+    const parts = sliceId.split('.');
+
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const colonIdx = parts[i].indexOf(':');
+
+      if (colonIdx >= 0) {
+        parts[i] = parts[i].substring(0, colonIdx);
+
+        return parts.slice(0, i + 1).join('.');
+      }
+    }
+
+    return sliceId;
+  }
+
+  /**
+   * Resolve parent instances by walking the element id through the slice hierarchy.
+   * Returns the instances that are the immediate parents of the last segment in the id.
+   */
+  private resolveParentsAtId(resource: FhirResource, elementId: string, sliceMap: Map<string, SliceMatchInfo>): unknown[] {
+    const parts = elementId.split('.');
+    // parts[0] is the resource type, skip it
+    // Walk parts[1..n-2] to resolve parents (stop before the last part)
+
+    let instances: unknown[] = [resource];
+    let idSoFar = parts[0];
+
+    for (let i = 1; i < parts.length - 1; i++) {
+      const part = parts[i];
+      const {field, slice} = this.parseIdPart(part);
+
+      // Get field values from current instances
+      const next: unknown[] = [];
+
+      for (const inst of instances) {
+        if (typeof inst !== 'object' || inst === null) {
+          continue;
+        }
+
+        next.push(...this.getFieldValues(inst as Record<string, unknown>, field));
+      }
+
+      if (slice) {
+        // Filter by slice discriminator
+        const sliceId = idSoFar + '.' + part;
+        const matchInfo = sliceMap.get(sliceId);
+
+        if (matchInfo && matchInfo.matchValue !== undefined) {
+          instances = next.filter(inst => this.matchesDiscriminator(inst, matchInfo));
+        } else {
+          instances = next;
+        }
+      } else {
+        instances = next;
+      }
+
+      idSoFar += '.' + part;
+    }
+
+    return instances;
+  }
+
+  /**
+   * Validate a single element that is within a slice context.
+   */
+  private async validateSlicedElement(resource: FhirResource, element: ElementDefinition, relPath: string, sliceMap: Map<string, SliceMatchInfo>): Promise<ValidationIssue[]> {
+    const issues: ValidationIssue[] = [];
+    const elementId = element.id ?? '';
+
+    // Resolve parent instances through the slice chain
+    const parents = this.resolveParentsAtId(resource, elementId, sliceMap);
+
+    if (parents.length === 0) {
+      return issues;
+    } // No matching parents → skip
+
+    const lastPart = elementId.split('.').pop() ?? '';
+    const {field: lastField, slice: lastSlice} = this.parseIdPart(lastPart);
+
+    for (const parent of parents) {
+      if (typeof parent !== 'object' || parent === null) {
+        continue;
+      }
+
+      let children = this.getFieldValues(parent as Record<string, unknown>, lastField);
+
+      // If this element defines a slice, filter children by discriminator
+      if (element.sliceName && lastSlice) {
+        const matchInfo = sliceMap.get(elementId);
+
+        if (matchInfo && matchInfo.matchValue !== undefined) {
+          children = children.filter(c => this.matchesDiscriminator(c, matchInfo));
+        }
+      }
+
+      // Cardinality check per parent
+      issues.push(...this.checkCardinalityCounts(element, children.length, relPath));
+
+      // Per-value validations (skip for slice definition elements themselves — children handle these)
+      if (!element.sliceName) {
+        for (const value of children) {
+          if (value === null || value === undefined) {
+            continue;
+          }
+
+          issues.push(...this.validateType(element, value, relPath));
+
+          if (element.binding) {
+            issues.push(...await this.validateBinding(element, value, relPath));
+          }
+
+          issues.push(...this.validateFixedValues(element, value, relPath));
+          issues.push(...this.validatePatternValues(element, value, relPath));
+        }
+      }
+    }
+
+    return issues;
+  }
+
+  /**
+   * Check if a resource instance matches a slice discriminator.
+   */
+  private matchesDiscriminator(instance: unknown, matchInfo: SliceMatchInfo): boolean {
+    if (typeof instance !== 'object' || instance === null) {
+      return false;
+    }
+
+    const obj = instance as Record<string, unknown>;
+
+    switch (matchInfo.discriminatorType) {
+
+      case 'value':
+        if (matchInfo.discriminatorPath === 'url') {
+          return obj.url === matchInfo.matchValue;
+        }
+
+        if (matchInfo.discriminatorPath === '$this') {
+          return this.matchesPattern(obj, matchInfo.matchValue);
+        }
+
+        // Nested paths like "code.coding.system"
+        if (matchInfo.discriminatorPath.includes('.')) {
+          const actual = this.getNestedValue(obj, matchInfo.discriminatorPath);
+
+          return actual === matchInfo.matchValue;
+        }
+
+        return obj[matchInfo.discriminatorPath] === matchInfo.matchValue;
+
+      case 'type':
+        if (matchInfo.discriminatorPath === '$this') {
+          return this.checkType(instance, matchInfo.matchValue as string);
+        }
+
+        return true;
+
+      case 'pattern':
+        if (matchInfo.discriminatorPath === '$this') {
+          return this.matchesPattern(obj, matchInfo.matchValue);
+        }
+
+        return true;
+
+      default:
+        // 'profile', 'exists': not implemented, accept all
+        return true;
+    }
+  }
+
+  /**
+   * Check if an instance matches a pattern (all keys in pattern must match).
+   */
+  private matchesPattern(instance: Record<string, unknown>, pattern: unknown): boolean {
+    if (!pattern || typeof pattern !== 'object') {
+      return false;
+    }
+
+    const p = pattern as Record<string, unknown>;
+
+    for (const key of Object.keys(p)) {
+      if (instance[key] !== p[key]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Navigate a dot-separated path into an object.
+   * If an array is encountered, takes the first element.
+   */
+  private getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+    const parts = path.split('.');
+    let current: unknown = obj;
+
+    for (const part of parts) {
+      if (typeof current !== 'object' || current === null) {
+        return undefined;
+      }
+
+      current = (current as Record<string, unknown>)[part];
+
+      if (Array.isArray(current)) {
+        current = current[0];
+      }
+    }
+
+    return current;
+  }
+
+  /**
+   * Parse an id segment into field name and optional slice name.
+   * e.g., "extension:nationality" → {field: "extension", slice: "nationality"}
+   * e.g., "url" → {field: "url"}
+   */
+  private parseIdPart(part: string): { field: string; slice?: string } {
+    const colonIdx = part.indexOf(':');
+
+    if (colonIdx >= 0) {
+      return {field: part.substring(0, colonIdx), slice: part.substring(colonIdx + 1)};
+    }
+
+    return {field: part};
+  }
+
+  // -------------------------------------------------------
+  // Field value extraction
+  // -------------------------------------------------------
+
+  /**
+   * Get child values from a parent object for a given field.
+   * Handles value[x] and other [x] choice types.
+   */
+  private getFieldValues(parent: Record<string, unknown>, field: string): unknown[] {
+    // Handle choice types like value[x], deceased[x]
+    if (field.endsWith('[x]')) {
+      const prefix = field.replace('[x]', '');
+
+      for (const key of Object.keys(parent)) {
+        if (key.startsWith(prefix) && key.length > prefix.length) {
+          const val = parent[key];
+
+          if (val !== undefined && val !== null) {
+            return Array.isArray(val) ? val : [val];
+          }
+        }
+      }
+
+      return [];
+    }
+
+    const val = parent[field];
+
+    if (val === undefined || val === null) {
+      return [];
+    }
+
+    if (Array.isArray(val)) {
+      return val;
+    }
+
+    return [val];
+  }
+
+  // -------------------------------------------------------
   // Cardinality
   // -------------------------------------------------------
 
-  private validateCardinality(
-    element: ElementDefinition,
-    values: unknown[],
-    path: string
-  ): ValidationIssue[] {
+  private validateCardinality(element: ElementDefinition, values: unknown[], path: string, resource: FhirResource): ValidationIssue[] {
+    const parts = path.split('.');
+
+    // For top-level elements, validate globally
+    if (parts.length === 1) {
+      return this.checkCardinalityCounts(element, values.length, path);
+    }
+
+    // For nested elements, validate per parent instance
+    const parentPath = parts.slice(0, -1).join('.');
+    const childKey = parts[parts.length - 1];
+    const parents = this.fhirPath.getValues(resource, parentPath);
+
+    // If no parent instances exist, skip — parent is optional and absent
+    if (parents.length === 0) {
+      return [];
+    }
+
     const issues: ValidationIssue[] = [];
-    const count = values.length;
+
+    for (const parent of parents) {
+      if (typeof parent !== 'object' || parent === null) {
+        continue;
+      }
+
+      const childCount = this.getFieldValues(parent as Record<string, unknown>, childKey).length;
+      issues.push(...this.checkCardinalityCounts(element, childCount, path));
+    }
+
+    return issues;
+  }
+
+  private checkCardinalityCounts(element: ElementDefinition, count: number, path: string): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
 
     if (count < element.min) {
       issues.push({
@@ -128,6 +528,7 @@ export class StructuralValidator {
 
     if (element.max !== '*') {
       const maxNum = parseInt(element.max, 10);
+
       if (!isNaN(maxNum) && count > maxNum) {
         issues.push({
           severity: 'error',
@@ -145,13 +546,12 @@ export class StructuralValidator {
   // Type validation
   // -------------------------------------------------------
 
-  private validateType(
-    element: ElementDefinition,
-    value: unknown,
-    path: string
-  ): ValidationIssue[] {
+  private validateType(element: ElementDefinition, value: unknown, path: string): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
-    if (!element.type || element.type.length === 0) return issues;
+
+    if (!element.type || element.type.length === 0) {
+      return issues;
+    }
 
     // Check if the value matches one of the allowed types
     const typeValid = element.type.some(t => this.checkType(value, t.code));
@@ -218,11 +618,7 @@ export class StructuralValidator {
   // Terminology binding
   // -------------------------------------------------------
 
-  private async validateBinding(
-    element: ElementDefinition,
-    value: unknown,
-    path: string
-  ): Promise<ValidationIssue[]> {
+  private async validateBinding(element: ElementDefinition, value: unknown, path: string): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
     const binding = element.binding!;
 
@@ -230,11 +626,13 @@ export class StructuralValidator {
     if (typeof value === 'string') {
       // Look up the system from the ValueSet
       const system = this.inferSystemFromValueSet(binding.valueSet);
+
       if (system) {
         const result = await this.terminology.validateCode(
           system, value, binding.valueSet,
           binding.strength as BindingStrength
         );
+
         if (!result.valid) {
           const severity = binding.strength === 'required' ? 'error' : 'warning';
           issues.push({
@@ -243,15 +641,21 @@ export class StructuralValidator {
           });
         }
       }
+
       return issues;
     }
 
     // Extract codings from Coding / CodeableConcept
     const codings = this.extractCodings(value);
-    if (codings.length === 0) return issues;
+
+    if (codings.length === 0) {
+      return issues;
+    }
 
     for (const coding of codings) {
-      if (!coding.system || !coding.code) continue;
+      if (!coding.system || !coding.code) {
+        continue;
+      }
 
       const result = await this.terminology.validateCode(
         coding.system,
@@ -280,7 +684,9 @@ export class StructuralValidator {
    * Infer the code system from a ValueSet URL for plain code types
    */
   private inferSystemFromValueSet(valueSetUrl?: string): string | undefined {
-    if (!valueSetUrl) return undefined;
+    if (!valueSetUrl) {
+      return undefined;
+    }
 
     // Known mappings from ValueSet URL to system
     const mappings: Record<string, string> = {
@@ -300,7 +706,10 @@ export class StructuralValidator {
   }
 
   private extractCodings(value: unknown): Coding[] {
-    if (!value || typeof value !== 'object') return [];
+    if (!value || typeof value !== 'object') {
+      return [];
+    }
+
     const v = value as Record<string, unknown>;
 
     // Direct Coding
@@ -320,11 +729,7 @@ export class StructuralValidator {
   // Fixed values
   // -------------------------------------------------------
 
-  private validateFixedValues(
-    element: ElementDefinition,
-    value: unknown,
-    path: string
-  ): ValidationIssue[] {
+  private validateFixedValues(element: ElementDefinition, value: unknown, path: string): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
 
     if (element.fixedString !== undefined) {
@@ -345,8 +750,18 @@ export class StructuralValidator {
       }
     }
 
+    if (element.fixedUri !== undefined) {
+      if (value !== element.fixedUri) {
+        issues.push({
+          severity: 'error', path, code: 'FIXED_VALUE',
+          message: `URI '${path}' must be exactly '${element.fixedUri}'`
+        });
+      }
+    }
+
     if (element.fixedCoding !== undefined) {
       const coding = value as Coding;
+
       if (
         coding.system !== element.fixedCoding.system ||
         coding.code !== element.fixedCoding.code
@@ -365,22 +780,20 @@ export class StructuralValidator {
   // Pattern values
   // -------------------------------------------------------
 
-  private validatePatternValues(
-    element: ElementDefinition,
-    value: unknown,
-    path: string
-  ): ValidationIssue[] {
+  private validatePatternValues(element: ElementDefinition, value: unknown, path: string): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
 
     if (element.patternCoding) {
       const coding = value as Coding;
       const pattern = element.patternCoding;
+
       if (pattern.system && coding.system !== pattern.system) {
         issues.push({
           severity: 'error', path, code: 'PATTERN_MISMATCH',
           message: `Coding.system must be '${pattern.system}'`
         });
       }
+
       if (pattern.code && coding.code !== pattern.code) {
         issues.push({
           severity: 'error', path, code: 'PATTERN_MISMATCH',
@@ -392,6 +805,7 @@ export class StructuralValidator {
     if (element.patternIdentifier) {
       const identifier = value as Record<string, unknown>;
       const pattern = element.patternIdentifier;
+
       if (pattern.system && identifier.system !== pattern.system) {
         issues.push({
           severity: 'error', path, code: 'PATTERN_MISMATCH',
@@ -407,12 +821,8 @@ export class StructuralValidator {
   // FHIRPath constraints
   // -------------------------------------------------------
 
-  private validateConstraint(
-    resource: object,
-    constraint: ElementDefinitionConstraint,
-    path: string
-  ): ValidationIssue[] {
-    const { values, error } = this.fhirPath.evaluate(resource, constraint.expression);
+  private validateConstraint(resource: object, constraint: ElementDefinitionConstraint, path: string): ValidationIssue[] {
+    const {values, error} = this.fhirPath.evaluate(resource, constraint.expression);
 
     if (error) {
       return [{
@@ -446,10 +856,7 @@ export class StructuralValidator {
   // Required root-level fields
   // -------------------------------------------------------
 
-  private validateRequiredFields(
-    resource: FhirResource,
-    sd: StructureDefinition
-  ): ValidationIssue[] {
+  private validateRequiredFields(resource: FhirResource, sd: StructureDefinition): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
 
     if (!resource.resourceType) {

@@ -90,10 +90,10 @@ export interface ElementDefinitionConstraint {
 }
 
 export interface ElementDefinitionSlicing {
-  discriminator: Array<{
+  discriminator: {
     type: 'value' | 'exists' | 'pattern' | 'type' | 'profile';
     path: string;
-  }>;
+  }[];
   description?: string;
   ordered?: boolean;
   rules: 'closed' | 'open' | 'openAtEnd';
@@ -171,7 +171,7 @@ export interface ValueSet {
     exclude?: ValueSetInclude[];
   };
   expansion?: {
-    contains: Array<{ system: string; code: string; display?: string }>;
+    contains: { system: string; code: string; display?: string }[];
   };
 }
 

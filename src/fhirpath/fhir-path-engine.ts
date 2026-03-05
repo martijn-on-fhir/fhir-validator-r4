@@ -3,8 +3,9 @@ import fhirpath, { type Model } from 'fhirpath';
 
 // Try to load the R4 model
 let r4Model: Model | undefined;
+
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   r4Model = require('fhirpath/fhir-context/r4') as Model;
 } catch {
   r4Model = undefined;
@@ -29,6 +30,7 @@ export class FhirPathEngine {
         context ?? undefined,
         r4Model
       ) as unknown[];
+
       return { values };
     } catch (e) {
       return {
@@ -44,9 +46,19 @@ export class FhirPathEngine {
    */
   isTruthy(resource: object, expression: string, context?: object): boolean {
     const { values } = this.evaluate(resource, expression, context);
-    if (values.length === 0) return false;
-    if (values.length === 1 && values[0] === false) return false;
-    if (values.length === 1 && values[0] === true) return true;
+
+    if (values.length === 0) {
+return false;
+}
+
+    if (values.length === 1 && values[0] === false) {
+return false;
+}
+
+    if (values.length === 1 && values[0] === true) {
+return true;
+}
+
     // Non-empty list of nodes = true
     return values.length > 0;
   }
@@ -55,8 +67,12 @@ export class FhirPathEngine {
    * Get all values for a path (e.g. "name.family")
    */
   getValues(resource: object, path: string): unknown[] {
-    if (!path) return [resource];
+    if (!path) {
+return [resource];
+}
+
     const { values } = this.evaluate(resource, path);
+
     return values.flat().filter(v => v !== null && v !== undefined);
   }
 
@@ -66,6 +82,7 @@ export class FhirPathEngine {
    */
   getNodes(resource: object, path: string): object[] {
     const values = this.getValues(resource, path);
+
     return values.filter((v): v is object => typeof v === 'object' && v !== null);
   }
 }

@@ -1,9 +1,9 @@
 // src/validator/fhir-validator.ts
-import type { ValidationResult, ValidationIssue } from '../types/fhir';
-import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
-import { TerminologyService, type TerminologyServiceOptions } from '../terminology/terminology-service';
 import { FhirPathEngine } from '../fhirpath/fhir-path-engine';
+import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
 import { StructuralValidator } from '../structural/structural-validator';
+import { TerminologyService, type TerminologyServiceOptions } from '../terminology/terminology-service';
+import type { ValidationResult, ValidationIssue } from '../types/fhir';
 
 export interface FhirValidatorOptions {
   /** Directories with StructureDefinition JSON files (loaded in order) */
@@ -54,13 +54,11 @@ export class FhirValidator {
    * If no profile is specified, the first profile from meta.profile is used
    * or the base FHIR profile.
    */
-  async validate(
-    resource: unknown,
-    profileUrl?: string
-  ): Promise<ValidationResult> {
+  async validate(resource: unknown, profileUrl?: string): Promise<ValidationResult> {
 
     // Step 1: Basic structure check
     const structureIssues = this.checkStructure(resource);
+
     if (structureIssues.length > 0) {
       return { valid: false, issues: structureIssues };
     }
@@ -74,9 +72,7 @@ export class FhirValidator {
   /**
    * Validate a batch of resources and return a result per resource
    */
-  async validateBatch(
-    resources: unknown[]
-  ): Promise<ValidationResult[]> {
+  async validateBatch(resources: unknown[]): Promise<ValidationResult[]> {
     return Promise.all(resources.map(r => this.validate(r)));
   }
 
@@ -91,6 +87,7 @@ export class FhirValidator {
         severity: 'error', path: '',
         message: 'Resource is null or undefined'
       });
+
       return issues;
     }
 
@@ -99,6 +96,7 @@ export class FhirValidator {
         severity: 'error', path: '',
         message: 'Resource must be a JSON object'
       });
+
       return issues;
     }
 
@@ -132,6 +130,7 @@ export class FhirValidator {
     terminologyCacheLookups: number;
   } {
     const termStats = this.terminology.stats();
+
     return {
       profiles: this.registry.size(),
       ...termStats,

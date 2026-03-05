@@ -11,14 +11,14 @@ import type {
 
 // Known systems validated by pattern
 const PATTERN_VALIDATORS: Record<string, RegExp> = {
-  'http://snomed.info/sct':                               /^\d{6,18}$/,
-  'http://loinc.org':                                     /^\d{1,5}-\d$/,
-  'http://www.nlm.nih.gov/research/umls/rxnorm':          /^\d+$/,
-  'http://fhir.nl/fhir/NamingSystem/bsn':                 /^\d{9}$/,
-  'http://fhir.nl/fhir/NamingSystem/agb-z':              /^\d{8}$/,
-  'http://fhir.nl/fhir/NamingSystem/uzi-nr-systems':     /^\d+$/,
-  'http://hl7.org/fhir/sid/us-npi':                      /^\d{10}$/,
-  'urn:oid:2.16.528.1.1007.3.1':                         /^\d{9}$/,   // BIG-register
+  'http://snomed.info/sct': /^\d{6,18}$/,
+  'http://loinc.org': /^\d{1,5}-\d$/,
+  'http://www.nlm.nih.gov/research/umls/rxnorm': /^\d+$/,
+  'http://fhir.nl/fhir/NamingSystem/bsn': /^\d{9}$/,
+  'http://fhir.nl/fhir/NamingSystem/agb-z': /^\d{8}$/,
+  'http://fhir.nl/fhir/NamingSystem/uzi-nr-systems': /^\d+$/,
+  'http://hl7.org/fhir/sid/us-npi': /^\d{10}$/,
+  'urn:oid:2.16.528.1.1007.3.1': /^\d{9}$/,   // BIG-register
 };
 
 // Systems we always accept as valid (cannot be validated locally)
@@ -62,8 +62,9 @@ export class TerminologyService {
    */
   async loadFromDirectory(dirPath: string): Promise<void> {
     let entries: import('fs').Dirent[];
+
     try {
-      entries = await fs.readdir(dirPath, { withFileTypes: true });
+      entries = await fs.readdir(dirPath, {withFileTypes: true});
     } catch {
       return; // Directory does not exist
     }
@@ -76,7 +77,9 @@ export class TerminologyService {
         continue;
       }
 
-      if (!entry.name.endsWith('.json')) continue;
+      if (!entry.name.endsWith('.json')) {
+        continue;
+      }
 
       try {
         const content = JSON.parse(await fs.readFile(fullPath, 'utf8'));
@@ -103,16 +106,14 @@ export class TerminologyService {
   /**
    * Validate a code against a binding
    */
-  async validateCode(
-    system: string,
-    code: string,
-    valueSetUrl?: string,
-    bindingStrength: BindingStrength = 'required'
-  ): Promise<CodeValidationResult> {
+  async validateCode(system: string, code: string, valueSetUrl?: string, _bindingStrength: BindingStrength = 'required'): Promise<CodeValidationResult> {
 
     // 1. Validate via ValueSet if specified
     if (valueSetUrl) {
-      const vs = this.valueSets.get(valueSetUrl);
+      // Strip version suffix (e.g., "|4.0.1") for lookup
+      const vsUrlClean = valueSetUrl.split('|')[0];
+      const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
+
       if (vs) {
         return this.validateAgainstValueSet(system, code, vs);
       }
@@ -122,23 +123,26 @@ export class TerminologyService {
         return this.validateExternal(system, code, valueSetUrl);
       }
 
-      // No ValueSet available - warning for required
+      // No ValueSet available — cannot validate, treat as valid
       return {
-        valid: bindingStrength !== 'required',
+        valid: true,
         message: `ValueSet ${valueSetUrl} not locally loaded, validation skipped`
       };
     }
 
     // 2. Validate directly against CodeSystem
     const cs = this.codeSystems.get(system);
+
     if (cs) {
       return this.validateAgainstCodeSystem(code, cs);
     }
 
     // 3. Pattern validation for known systems
     const pattern = PATTERN_VALIDATORS[system];
+
     if (pattern) {
       const valid = pattern.test(code);
+
       return {
         valid,
         message: valid ? undefined : `Code '${code}' does not match the pattern for ${system}`
@@ -147,7 +151,7 @@ export class TerminologyService {
 
     // 4. Trusted systems
     if (TRUSTED_SYSTEMS.has(system)) {
-      return { valid: true };
+      return {valid: true};
     }
 
     // 5. Unknown system
@@ -157,44 +161,56 @@ export class TerminologyService {
     };
   }
 
-  private validateAgainstValueSet(
-    system: string,
-    code: string,
-    vs: ValueSet
-  ): CodeValidationResult {
+  private validateAgainstValueSet(system: string, code: string, vs: ValueSet): CodeValidationResult {
 
     // Try expansion first (most complete)
     if (vs.expansion?.contains) {
       const found = vs.expansion.contains.find(
         c => c.system === system && c.code === code
       );
-      if (found) return { valid: true, display: found.display };
-      return { valid: false, message: `Code ${system}|${code} not in expansion of ${vs.url}` };
+
+      if (found) {
+        return {valid: true, display: found.display};
+      }
+
+      return {valid: false, message: `Code ${system}|${code} not in expansion of ${vs.url}`};
     }
 
     // Compose-based validation
     for (const include of vs.compose?.include ?? []) {
-      if (include.system && include.system !== system) continue;
+      if (include.system && include.system !== system) {
+        continue;
+      }
 
       // Explicitly enumerated codes
       if (include.concept) {
         const found = include.concept.find(c => c.code === code);
-        if (found) return { valid: true, display: found.display };
+
+        if (found) {
+          return {valid: true, display: found.display};
+        }
       }
 
       // Nested ValueSets
       for (const nestedUrl of include.valueSet ?? []) {
         const nested = this.valueSets.get(nestedUrl);
+
         if (nested) {
           const result = this.validateAgainstValueSet(system, code, nested);
-          if (result.valid) return result;
+
+          if (result.valid) {
+            return result;
+          }
         }
       }
 
       // No filter and no explicit codes: validate via CodeSystem
       if (!include.concept && !include.filter) {
         const cs = this.codeSystems.get(system);
-        if (cs) return this.validateAgainstCodeSystem(code, cs);
+
+        if (cs) {
+          return this.validateAgainstCodeSystem(code, cs);
+        }
       }
     }
 
@@ -204,16 +220,16 @@ export class TerminologyService {
     };
   }
 
-  private validateAgainstCodeSystem(
-    code: string,
-    cs: CodeSystem
-  ): CodeValidationResult {
+  private validateAgainstCodeSystem(code: string, cs: CodeSystem): CodeValidationResult {
     if (cs.content === 'not-present') {
-      return { valid: true, message: 'CodeSystem has no local content' };
+      return {valid: true, message: 'CodeSystem has no local content'};
     }
 
     const found = this.findInConcepts(code, cs.concept ?? []);
-    if (found) return { valid: true, display: found.display };
+
+    if (found) {
+      return {valid: true, display: found.display};
+    }
 
     return {
       valid: false,
@@ -221,26 +237,27 @@ export class TerminologyService {
     };
   }
 
-  private findInConcepts(
-    code: string,
-    concepts: CodeSystemConcept[]
-  ): CodeSystemConcept | undefined {
+  private findInConcepts(code: string, concepts: CodeSystemConcept[]): CodeSystemConcept | undefined {
     for (const concept of concepts) {
-      if (concept.code === code) return concept;
+      if (concept.code === code) {
+        return concept;
+      }
+
       if (concept.concept) {
         const found = this.findInConcepts(code, concept.concept);
-        if (found) return found;
+
+        if (found) {
+          return found;
+        }
       }
     }
+
     return undefined;
   }
 
-  private async validateExternal(
-    system: string,
-    code: string,
-    valueSetUrl: string
-  ): Promise<CodeValidationResult> {
+  private async validateExternal(system: string, code: string, valueSetUrl: string): Promise<CodeValidationResult> {
     const cacheKey = `${system}|${code}|${valueSetUrl}`;
+
     if (this.externalCache.has(cacheKey)) {
       return this.externalCache.get(cacheKey)!;
     }
@@ -257,11 +274,11 @@ export class TerminologyService {
         `&code=${encodeURIComponent(code)}` +
         `&url=${encodeURIComponent(valueSetUrl)}`;
 
-      const res = await fetch(url, { signal: controller.signal });
+      const res = await fetch(url, {signal: controller.signal});
       clearTimeout(timeout);
 
       const params = await res.json() as {
-        parameter?: Array<{ name: string; valueBoolean?: boolean; valueString?: string }>
+        parameter?: { name: string; valueBoolean?: boolean; valueString?: string }[]
       };
 
       const result = params.parameter?.find(p => p.name === 'result');
@@ -275,6 +292,7 @@ export class TerminologyService {
       };
 
       this.externalCache.set(cacheKey, validation);
+
       return validation;
     } catch {
       return {
