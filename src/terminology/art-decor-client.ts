@@ -35,6 +35,7 @@ export class ArtDecorClient {
 
       if (!res.ok) {
         this.failedUrls.add(url);
+
         return null;
       }
 
@@ -42,12 +43,14 @@ export class ArtDecorClient {
 
       if (data.resourceType !== 'ValueSet' || !data.url) {
         this.failedUrls.add(url);
+
         return null;
       }
 
       return data as unknown as ValueSet;
     } catch {
       this.failedUrls.add(url);
+
       return null;
     }
   }
@@ -73,6 +76,7 @@ export class ArtDecorClient {
 
       if (!res.ok) {
         this.failedUrls.add(systemUrl);
+
         return null;
       }
 
@@ -85,12 +89,14 @@ export class ArtDecorClient {
 
       if (!cs || cs.resourceType !== 'CodeSystem') {
         this.failedUrls.add(systemUrl);
+
         return null;
       }
 
       return cs as unknown as CodeSystem;
     } catch {
       this.failedUrls.add(systemUrl);
+
       return null;
     }
   }
@@ -109,6 +115,7 @@ export class ArtDecorClient {
         signal: controller.signal,
         headers: { 'Accept': 'application/fhir+json, application/json' },
       });
+
       return res;
     } finally {
       clearTimeout(timeout);

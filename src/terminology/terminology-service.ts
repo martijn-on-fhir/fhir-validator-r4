@@ -8,8 +8,8 @@ import type {
   CodeValidationResult,
   BindingStrength
 } from '../types/fhir';
-import {NictizTerminologyClient, type NictizTerminologyConfig} from './nictiz-terminology-client';
 import {ArtDecorClient} from './art-decor-client';
+import {NictizTerminologyClient, type NictizTerminologyConfig} from './nictiz-terminology-client';
 
 /**
  * BSN elfproef (11-test) — validates Dutch citizen service numbers.
@@ -431,7 +431,7 @@ export class TerminologyService {
     }
   }
 
-  private async validateViaNictiz(system: string, code: string, valueSetUrl?: string, bindingStrength: BindingStrength = 'required'): Promise<CodeValidationResult> {
+  private async validateViaNictiz(system: string, code: string, valueSetUrl?: string, _bindingStrength: BindingStrength = 'required'): Promise<CodeValidationResult> {
 
     if (!this.nictizClient) {
       return {valid: true, message: 'Nictiz client not configured'};
