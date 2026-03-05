@@ -172,24 +172,127 @@ When validating a code, the terminology service uses the following cascade:
 6. **Nictiz CodeSystem** — for completely unknown systems, try Nictiz
 7. **Skip** — if nothing can validate the code, accept it with a message
 
-## Directory Layout
+## Resource Files
+
+The validator needs FHIR StructureDefinitions, ValueSets, and CodeSystems as JSON files to validate against. These are **included in the npm package** but can also be downloaded manually.
+
+### Directory Layout
 
 ```
-profiles/r4-core/     -- Base FHIR R4 StructureDefinitions
-profiles/nl-core/     -- nl-core profile overlays
-terminology/r4-core/  -- Base FHIR R4 ValueSets and CodeSystems
-terminology/nl-core/  -- nl-core terminology
+profiles/r4-core/     -- Base FHIR R4 StructureDefinitions (658 files)
+profiles/nl-core/     -- nl-core profile overlays (164 files)
+terminology/r4-core/  -- Base FHIR R4 ValueSets and CodeSystems (2378 files)
+terminology/nl-core/  -- nl-core terminology (4 files)
 ```
 
 Directories are loaded in order — base definitions first so that profile overlays can inherit from them.
 
+### Downloading FHIR R4 Core Definitions
+
+Download the official HL7 FHIR R4 definitions package and extract the JSON files:
+
+```bash
+# Download the FHIR R4 definitions
+curl -LO https://hl7.org/fhir/R4/definitions.json.zip
+
+# Extract StructureDefinitions into profiles/r4-core/
+mkdir -p profiles/r4-core
+unzip -j definitions.json.zip "profiles-resources.json" "profiles-types.json" -d /tmp/fhir-r4
+# Each file contains a Bundle — extract individual StructureDefinitions:
+node -e "
+  const fs = require('fs');
+  for (const f of ['profiles-resources', 'profiles-types']) {
+    const bundle = JSON.parse(fs.readFileSync('/tmp/fhir-r4/' + f + '.json', 'utf8'));
+    for (const entry of bundle.entry || []) {
+      const r = entry.resource;
+      if (r.resourceType === 'StructureDefinition') {
+        fs.writeFileSync('profiles/r4-core/StructureDefinition-' + r.id + '.json', JSON.stringify(r, null, 2));
+      }
+    }
+  }
+"
+
+# Extract ValueSets and CodeSystems into terminology/r4-core/
+mkdir -p terminology/r4-core
+unzip -j definitions.json.zip "valuesets.json" -d /tmp/fhir-r4
+node -e "
+  const fs = require('fs');
+  const bundle = JSON.parse(fs.readFileSync('/tmp/fhir-r4/valuesets.json', 'utf8'));
+  for (const entry of bundle.entry || []) {
+    const r = entry.resource;
+    if (r.resourceType === 'ValueSet') {
+      fs.writeFileSync('terminology/r4-core/ValueSet-' + r.id + '.json', JSON.stringify(r, null, 2));
+    } else if (r.resourceType === 'CodeSystem') {
+      fs.writeFileSync('terminology/r4-core/CodeSystem-' + r.id + '.json', JSON.stringify(r, null, 2));
+    }
+  }
+"
+```
+
+### Downloading nl-core Profiles
+
+The Dutch nl-core profiles are published by Nictiz as npm packages on the Simplifier registry:
+
+```bash
+# Download the nl-core package from Simplifier
+npm --registry https://packages.simplifier.net pack nictiz.fhir.nl.r4.nl-core
+
+# Extract StructureDefinitions
+mkdir -p profiles/nl-core
+tar xzf nictiz.fhir.nl.r4.nl-core-*.tgz
+node -e "
+  const fs = require('fs');
+  const dir = 'package/examples'; // or 'package' depending on package version
+  // Copy StructureDefinitions
+  for (const f of fs.readdirSync('package')) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const r = JSON.parse(fs.readFileSync('package/' + f, 'utf8'));
+      if (r.resourceType === 'StructureDefinition') {
+        fs.copyFileSync('package/' + f, 'profiles/nl-core/' + f);
+      } else if (r.resourceType === 'ValueSet') {
+        fs.mkdirSync('terminology/nl-core', {recursive: true});
+        fs.copyFileSync('package/' + f, 'terminology/nl-core/' + f);
+      } else if (r.resourceType === 'CodeSystem') {
+        fs.mkdirSync('terminology/nl-core', {recursive: true});
+        fs.copyFileSync('package/' + f, 'terminology/nl-core/' + f);
+      }
+    } catch {}
+  }
+"
+rm -rf package nictiz.fhir.nl.r4.nl-core-*.tgz
+```
+
+### Using Custom Profiles
+
+You can point the validator at any directory containing FHIR JSON files. For example, to add your own organization's profiles:
+
+```typescript
+const validator = await FhirValidator.create({
+  profilesDirs: [
+    'profiles/r4-core',
+    'profiles/nl-core',
+    'profiles/my-organization',  // your custom profiles
+  ],
+  terminologyDirs: [
+    'terminology/r4-core',
+    'terminology/nl-core',
+    'terminology/my-organization',  // your custom ValueSets/CodeSystems
+  ],
+});
+```
+
+The validator recursively scans all subdirectories for `.json` files.
+
 ## Development
 
 ```bash
-npm run build    # Compile TypeScript to dist/
-npm test         # Run tests (30 tests)
-npm run dev      # Run via ts-node
-npm run lint     # ESLint
+npm run build        # Webpack bundle + type declarations
+npm run build:js     # Webpack bundle only
+npm run build:types  # Type declarations only
+npm test             # Run tests (30 tests)
+npm run dev          # Run via ts-node
+npm run lint         # ESLint
 ```
 
 ## License

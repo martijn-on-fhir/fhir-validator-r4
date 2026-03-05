@@ -1,16 +1,57 @@
 {
   "name": "fhir-validator-mx",
   "version": "0.1.0",
-  "description": "FHIR R4 validator for Mexican healthcare standards",
+  "description": "FHIR R4 resource validator with Dutch nl-core profile support and Nictiz terminologieserver integration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/",
+    "profiles/",
+    "terminology/",
+    "README.md",
+    "LICENSE",
+    "config.example.json"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "webpack && tsc --emitDeclarationOnly --outDir dist",
+    "build:types": "tsc --emitDeclarationOnly --outDir dist",
+    "build:js": "webpack",
     "dev": "ts-node src/index.ts",
     "test": "jest",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "prepublishOnly": "npm run lint && npm test && npm run build"
   },
+  "keywords": [
+    "fhir",
+    "fhir-r4",
+    "hl7",
+    "validator",
+    "healthcare",
+    "nl-core",
+    "nictiz",
+    "snomed",
+    "terminology",
+    "structuredefinition"
+  ],
+  "author": "Martijn Schimmel",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/martijn-on-fhir/fhir-validator-r4.git"
+  },
+  "bugs": {
+    "url": "https://github.com/martijn-on-fhir/fhir-validator-r4/issues"
+  },
+  "homepage": "https://github.com/martijn-on-fhir/fhir-validator-r4#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "fhirpath": "^3.15.0"
   },
@@ -24,8 +65,11 @@
     "eslint-plugin-prefer-arrow": "^1.2.3",
     "jest": "^29.0.0",
     "ts-jest": "^29.0.0",
+    "ts-loader": "^9.5.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.0",
-    "typescript-eslint": "^8.56.1"
+    "typescript-eslint": "^8.56.1",
+    "webpack": "^5.105.4",
+    "webpack-cli": "^6.0.1"
   }
 }
