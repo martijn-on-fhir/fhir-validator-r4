@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { FhirValidator, TerminologyService } from '../src';
+import { FhirValidator, NictizTerminologyClient } from '../src';
 import type { NictizTerminologyConfig } from '../src';
 
 async function main(): Promise<void> {
@@ -13,33 +13,21 @@ async function main(): Promise<void> {
   }
 
   console.log('Testing Nictiz terminologieserver connection...\n');
+  const nictiz = new NictizTerminologyClient(config.terminology as NictizTerminologyConfig);
 
-  const terminology = new TerminologyService({
-    nictiz: config.terminology as NictizTerminologyConfig,
-  });
-
-  // Test 1: Validate a SNOMED code via Nictiz
-  console.log('1. SNOMED code 47078008 (gehoorfunctie):');
-  const r1 = await terminology.validateCode(
-    'http://snomed.info/sct', '47078008',
-    'http://snomed.info/sct?fhir_vs'
-  );
+  // Test 1: Validate a valid SNOMED code via CodeSystem
+  console.log('1. SNOMED 47078008 (gehoorfunctie):');
+  const r1 = await nictiz.validateCode('http://snomed.info/sct', '47078008');
   console.log('  ', r1);
 
   // Test 2: Validate an invalid SNOMED code
-  console.log('\n2. SNOMED code 9999999 (does not exist):');
-  const r2 = await terminology.validateCode(
-    'http://snomed.info/sct', '9999999',
-    'http://snomed.info/sct?fhir_vs'
-  );
+  console.log('\n2. SNOMED 9999999 (does not exist):');
+  const r2 = await nictiz.validateCode('http://snomed.info/sct', '9999999');
   console.log('  ', r2);
 
-  // Test 3: Validate a LOINC code
-  console.log('\n3. LOINC code 85354-9 (blood pressure panel):');
-  const r3 = await terminology.validateCode(
-    'http://loinc.org', '85354-9',
-    'http://loinc.org/vs'
-  );
+  // Test 3: Validate a LOINC code via CodeSystem
+  console.log('\n3. LOINC 85354-9 (blood pressure panel):');
+  const r3 = await nictiz.validateCode('http://loinc.org', '85354-9');
   console.log('  ', r3);
 }
 

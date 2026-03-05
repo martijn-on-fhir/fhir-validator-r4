@@ -7,6 +7,8 @@ export interface NictizTerminologyConfig {
   password: string;
   clientId: string;
   grantType: string;
+  /** Override system versions sent to the server, e.g. { "http://snomed.info/sct": "http://snomed.info/sct/11000146104/version/20260228" } */
+  systemVersions?: Record<string, string>;
 }
 
 interface OAuthToken {
@@ -19,6 +21,12 @@ export interface NictizValidationResult {
   display?: string;
   message?: string;
 }
+
+// Default system versions for the Dutch Nictiz terminologieserver.
+// SNOMED CT NL edition (11000146104) — uses the latest available version.
+const DEFAULT_SYSTEM_VERSIONS: Record<string, string> = {
+  'http://snomed.info/sct': 'http://snomed.info/sct/11000146104/version/20260228',
+};
 
 export class NictizTerminologyClient {
   private config: NictizTerminologyConfig;
@@ -72,43 +80,71 @@ export class NictizTerminologyClient {
     try {
       const accessToken = await this.authenticate();
 
-      const params = new URLSearchParams({
-        system,
-        code,
-      });
+      const systemVersion = this.config.systemVersions?.[system] ?? DEFAULT_SYSTEM_VERSIONS[system];
+      let endpoint: string;
+      let body: Record<string, unknown>;
 
       if (valueSetUrl) {
-        params.set('url', valueSetUrl.split('|')[0]);
+        endpoint = `${this.config.baseUrl}/fhir/ValueSet/$validate-code`;
+        body = this.buildParameters([
+          { name: 'url', valueUri: valueSetUrl.split('|')[0] },
+          { name: 'system', valueUri: system },
+          { name: 'code', valueCode: code },
+          ...(systemVersion ? [{ name: 'systemVersion', valueString: systemVersion }] : []),
+        ]);
+      } else {
+        // Use $lookup for CodeSystem validation — more widely supported than $validate-code
+        endpoint = `${this.config.baseUrl}/fhir/CodeSystem/$lookup`;
+        body = this.buildParameters([
+          { name: 'system', valueUri: system },
+          { name: 'code', valueCode: code },
+          ...(systemVersion ? [{ name: 'version', valueString: systemVersion }] : []),
+        ]);
       }
 
-      const endpoint = valueSetUrl
-        ? `${this.config.baseUrl}/fhir/ValueSet/$validate-code`
-        : `${this.config.baseUrl}/fhir/CodeSystem/$validate-code`;
-
-      const res = await fetch(`${endpoint}?${params.toString()}`, {
+      const res = await fetch(endpoint, {
+        method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/fhir+json',
           'Accept': 'application/fhir+json',
         },
+        body: JSON.stringify(body),
       });
 
-      if (!res.ok) {
-        return { valid: true, message: `Nictiz server returned ${res.status}, validation skipped` };
-      }
-
       const data = await res.json() as {
+        resourceType?: string;
         parameter?: { name: string; valueBoolean?: boolean; valueString?: string }[];
+        issue?: { severity: string; diagnostics?: string }[];
       };
 
-      const resultParam = data.parameter?.find(p => p.name === 'result');
-      const displayParam = data.parameter?.find(p => p.name === 'display');
-      const messageParam = data.parameter?.find(p => p.name === 'message');
+      let result: NictizValidationResult;
 
-      const result: NictizValidationResult = {
-        valid: resultParam?.valueBoolean === true,
-        display: displayParam?.valueString,
-        message: messageParam?.valueString,
-      };
+      if (!res.ok) {
+        if (valueSetUrl) {
+          return { valid: true, message: `Nictiz server returned ${res.status}, validation skipped` };
+        }
+
+        // $lookup error — distinguish "code not found" from "system unavailable"
+        const diag = data.issue?.[0]?.diagnostics ?? '';
+        const systemUnavailable = diag.includes('Could not find the code system') || diag.includes('could not be found');
+
+        if (systemUnavailable) {
+          result = { valid: true, message: `CodeSystem ${system} not available on Nictiz, validation skipped` };
+        } else {
+          result = { valid: false, message: diag || `Code not found in ${system}` };
+        }
+      } else if (!valueSetUrl) {
+        // $lookup success — the code exists, extract display name
+        const displayParam = data.parameter?.find(p => p.name === 'display');
+        result = { valid: true, display: displayParam?.valueString };
+      } else {
+        // $validate-code success — check the result parameter
+        const resultParam = data.parameter?.find(p => p.name === 'result');
+        const displayParam = data.parameter?.find(p => p.name === 'display');
+        const messageParam = data.parameter?.find(p => p.name === 'message');
+        result = { valid: resultParam?.valueBoolean === true, display: displayParam?.valueString, message: messageParam?.valueString };
+      }
 
       this.cache.set(cacheKey, result);
 
@@ -119,6 +155,16 @@ export class NictizTerminologyClient {
         message: `Nictiz terminology validation failed: ${(e as Error).message}`,
       };
     }
+  }
+
+  private buildParameters(params: Record<string, string>[]): Record<string, unknown> {
+    return {
+      resourceType: 'Parameters',
+      parameter: params.map(p => {
+        const { name, ...rest } = p;
+        return { name, ...rest };
+      }),
+    };
   }
 
   clearCache(): void {

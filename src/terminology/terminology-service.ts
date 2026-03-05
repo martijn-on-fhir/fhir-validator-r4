@@ -152,9 +152,10 @@ export class TerminologyService {
       if (vs) {
         const localResult = this.validateAgainstValueSet(system, code, vs);
 
-        // If local validation fails and Nictiz is available, try Nictiz as second opinion
+        // If local validation fails and Nictiz is available, validate against CodeSystem
+        // (not the ValueSet — Nictiz may not have FHIR core ValueSets like observation-codes)
         if (!localResult.valid && this.nictizClient && !this.options.disableExternalCalls) {
-          return this.validateViaNictiz(system, code, valueSetUrl);
+          return this.validateViaNictiz(system, code);
         }
 
         return localResult;

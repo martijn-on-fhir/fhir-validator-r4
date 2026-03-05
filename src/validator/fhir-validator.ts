@@ -5,6 +5,7 @@ import { FhirPathEngine } from '../fhirpath/fhir-path-engine';
 import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
 import { StructuralValidator } from '../structural/structural-validator';
 import { TerminologyService, type TerminologyServiceOptions } from '../terminology/terminology-service';
+import type { NictizTerminologyConfig } from '../terminology/nictiz-terminology-client';
 import type { IssueSeverity, ValidationIssue, ValidationResult } from '../types/fhir';
 
 /** Configurable severity overrides per issue code */
@@ -233,7 +234,7 @@ export class FhirValidator {
    * Load terminology credentials from a config file (e.g. config.local.json).
    * Returns null if the file does not exist — safe to call unconditionally.
    */
-  static async loadConfig(configPath: string): Promise<{ terminology?: { baseUrl: string; authUrl: string; user: string; password: string; clientId: string; grantType: string } } | null> {
+  static async loadConfig(configPath: string): Promise<{ terminology?: NictizTerminologyConfig } | null> {
     try {
       const content = await readFile(configPath, 'utf8');
 
