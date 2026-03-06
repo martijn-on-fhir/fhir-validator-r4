@@ -16,11 +16,16 @@ export interface FhirPathResult {
   error?: string;
 }
 
+type CompiledFn = (resource: object, context?: object) => unknown[];
+
 export class FhirPathEngine {
 
   /** Per-validation cache for getValues() calls, keyed by path */
   private valuesCache: Map<string, unknown[]> | null = null;
   private valuesCacheResource: object | null = null;
+
+  /** Compiled expression cache — parse once, evaluate many times */
+  private compiledCache = new Map<string, CompiledFn>();
 
   /**
    * Enable per-resource caching for getValues().
@@ -39,15 +44,18 @@ export class FhirPathEngine {
   /**
    * Evaluate a FHIRPath expression on a resource.
    * Does not throw — returns an empty result with error string.
+   * Expressions are compiled once and cached for reuse.
    */
   evaluate(resource: object, expression: string, context?: object): FhirPathResult {
     try {
-      const values = fhirpath.evaluate(
-        resource,
-        expression,
-        context ?? undefined,
-        r4Model
-      ) as unknown[];
+      let compiled = this.compiledCache.get(expression);
+
+      if (!compiled) {
+        compiled = fhirpath.compile(expression, r4Model) as CompiledFn;
+        this.compiledCache.set(expression, compiled);
+      }
+
+      const values = compiled(resource, context ?? undefined) as unknown[];
 
       return {values};
 
@@ -102,8 +110,7 @@ export class FhirPathEngine {
       }
     }
 
-    const {values} = this.evaluate(resource, path);
-    const result = values.flat().filter(v => v !== null && v !== undefined);
+    const result = this.evaluate(resource, path).values.flat().filter(v => v !== null && v !== undefined);
 
     if (this.valuesCache && resource === this.valuesCacheResource) {
       this.valuesCache.set(path, result);

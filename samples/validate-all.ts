@@ -50,7 +50,6 @@ async function main(): Promise<void> {
       const result = await validator.validate(resource);
 
       if (result.valid) {
-        console.log(`${progress} PASS  ${file}`);
         passed++;
       } else {
         console.log(`${progress} FAIL  ${file}`);
