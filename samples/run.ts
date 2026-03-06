@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as fs from 'node:fs';
-import { FhirValidator } from '../src';
+import { FhirValidator } from '../dist';
 
 async function main(): Promise<void> {
 

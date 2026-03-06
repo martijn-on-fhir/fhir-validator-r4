@@ -96,6 +96,8 @@ export class TerminologyService {
 
   private valueSets = new Map<string, ValueSet>();
   private codeSystems = new Map<string, CodeSystem>();
+  /** Flat code→concept lookup per CodeSystem URL for O(1) concept search */
+  private codeSystemFlatIndex = new Map<string, Map<string, CodeSystemConcept>>();
   private options: TerminologyServiceOptions;
   private nictizClient: NictizTerminologyClient | null = null;
   private artDecorClient: ArtDecorClient | null = null;
@@ -189,6 +191,23 @@ export class TerminologyService {
 
   registerCodeSystem(cs: CodeSystem): void {
     this.codeSystems.set(cs.url, cs);
+
+    // Build flat index for O(1) concept lookup
+    if (cs.concept?.length) {
+      const flat = new Map<string, CodeSystemConcept>();
+      this.flattenConcepts(cs.concept, flat);
+      this.codeSystemFlatIndex.set(cs.url, flat);
+    }
+  }
+
+  private flattenConcepts(concepts: CodeSystemConcept[], flat: Map<string, CodeSystemConcept>): void {
+    for (const concept of concepts) {
+      flat.set(concept.code, concept);
+
+      if (concept.concept) {
+        this.flattenConcepts(concept.concept, flat);
+      }
+    }
   }
 
   /** Cache for validateCode results to avoid duplicate lookups */
@@ -371,7 +390,9 @@ export class TerminologyService {
       return {valid: true, message: 'CodeSystem has no local content'};
     }
 
-    const found = this.findInConcepts(code, cs.concept ?? []);
+    // Use flat index for O(1) lookup
+    const flat = this.codeSystemFlatIndex.get(cs.url);
+    const found = flat?.get(code);
 
     if (found) {
       return {valid: true, display: found.display};
@@ -381,26 +402,6 @@ export class TerminologyService {
       valid: false,
       message: `Code not found in CodeSystem ${cs.url}`
     };
-  }
-
-  private findInConcepts(code: string, concepts: CodeSystemConcept[]): CodeSystemConcept | undefined {
-
-    for (const concept of concepts) {
-
-      if (concept.code === code) {
-        return concept;
-      }
-
-      if (concept.concept) {
-        const found = this.findInConcepts(code, concept.concept);
-
-        if (found) {
-          return found;
-        }
-      }
-    }
-
-    return undefined;
   }
 
   private isRateLimited(): boolean {

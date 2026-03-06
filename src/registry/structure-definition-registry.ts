@@ -11,6 +11,8 @@ export class StructureDefinitionRegistry {
   private lazyIndex = new Map<string, string>();
   /** Tracks which files have already been loaded */
   private loadedFiles = new Set<string>();
+  /** Cache for resolved (flattened) element lists, keyed by SD url */
+  private elementsCache = new Map<string, ElementDefinition[]>();
 
   /**
    * Register index entries for lazy loading.
@@ -106,17 +108,29 @@ export class StructureDefinitionRegistry {
    * including elements from the base definition (inheritance)
    */
   resolveElements(sd: StructureDefinition): ElementDefinition[] {
+    const cached = this.elementsCache.get(sd.url);
+
+    if (cached) {
+      return cached;
+    }
+
     // Use snapshot if available (most complete)
     const ownElements = sd.snapshot?.element ?? sd.differential?.element ?? [];
 
     if (!sd.baseDefinition) {
-      return [...ownElements];
+      const result = [...ownElements];
+      this.elementsCache.set(sd.url, result);
+
+      return result;
     }
 
     const base = this.resolve(sd.baseDefinition);
 
     if (!base) {
-      return [...ownElements];
+      const result = [...ownElements];
+      this.elementsCache.set(sd.url, result);
+
+      return result;
     }
 
     const baseElements = this.resolveElements(base);
@@ -134,7 +148,10 @@ export class StructureDefinitionRegistry {
       merged.set(key, el);
     }
 
-    return Array.from(merged.values());
+    const result = Array.from(merged.values());
+    this.elementsCache.set(sd.url, result);
+
+    return result;
   }
 
   /**

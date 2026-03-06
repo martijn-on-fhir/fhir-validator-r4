@@ -73,9 +73,7 @@ export class FhirValidator {
   static async create(options: FhirValidatorOptions = {}): Promise<FhirValidator> {
 
     const allDirs = [...(options.profilesDirs ?? []), ...(options.terminologyDirs ?? [])];
-    const artDecorCacheDir = allDirs.length > 0
-      ? path.join(allDirs[0], '..', '.art-decor-cache')
-      : undefined;
+    const artDecorCacheDir = allDirs.length > 0 ? path.join(allDirs[0], '..', '.art-decor-cache') : undefined;
 
     const validator = new FhirValidator(options.terminology, options.severityOverrides, options.fhirVersion, artDecorCacheDir);
 

@@ -48,6 +48,9 @@ export class StructuralValidator {
 
     const elements = this.registry.resolveElements(sd);
 
+    // Enable per-resource FHIRPath cache to avoid duplicate evaluations
+    this.fhirPath.enableCache(resource);
+
     // Validate root-level elements
     issues.push(...this.validateRequiredFields(resource, sd));
 
@@ -109,6 +112,9 @@ export class StructuralValidator {
       }
     }
 
+    // Clear per-resource FHIRPath cache
+    this.fhirPath.clearCache();
+
     const errors = issues.filter(i => i.severity === 'error');
 
     return {
@@ -131,6 +137,15 @@ export class StructuralValidator {
   private buildSliceMap(elements: ElementDefinition[]): Map<string, SliceMatchInfo> {
 
     const map = new Map<string, SliceMatchInfo>();
+
+    // Build O(1) lookup by element id
+    const elementsById = new Map<string, ElementDefinition>();
+
+    for (const el of elements) {
+      if (el.id) {
+        elementsById.set(el.id, el);
+      }
+    }
 
     // Collect elements that define slicing
     const slicingDefs = new Map<string, ElementDefinition>();
@@ -160,7 +175,7 @@ export class StructuralValidator {
       if (disc.type === 'value') {
         if (disc.path === 'url') {
           // Extension slicing: look for fixedUri on child .url element
-          const urlChild = elements.find(e => e.id === el.id + '.url');
+          const urlChild = elementsById.get(el.id + '.url');
           matchValue = urlChild?.fixedUri;
         } else if (disc.path === '$this') {
           // Pattern on the slice element itself
@@ -168,7 +183,7 @@ export class StructuralValidator {
         } else {
           // Match by a specific field (use, system, code, etc.)
           // Check for fixed value on the child element
-          const child = elements.find(e => e.id === el.id + '.' + disc.path);
+          const child = elementsById.get(el.id + '.' + disc.path);
           matchValue = child?.fixedCode ?? child?.fixedString ?? child?.fixedUri;
 
           // Fallback: check for pattern on the slice element itself
@@ -190,8 +205,7 @@ export class StructuralValidator {
       // 'exists' discriminator: determine if the slice expects the field to exist or not
       if (disc.type === 'exists' && disc.path) {
         // Check if the slice's child element for this path has min≥1 (exists) or max=0 (not exists)
-        const childId = el.id + '.' + disc.path;
-        const childEl = elements.find(e => e.id === childId);
+        const childEl = elementsById.get(el.id + '.' + disc.path);
 
         if (childEl) {
           // matchValue = true means "field must exist", false means "field must not exist"
