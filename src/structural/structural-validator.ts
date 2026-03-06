@@ -689,6 +689,7 @@ return false;
   }
 
   private checkType(value: unknown, fhirType: string): boolean {
+
     switch (fhirType) {
       case 'string':
       case 'code':
@@ -787,16 +788,13 @@ return false;
     }
 
     for (const coding of codings) {
+
       if (!coding.system || !coding.code) {
         continue;
       }
 
-      const result = await this.terminology.validateCode(
-        coding.system,
-        coding.code,
-        binding.valueSet,
-        binding.strength as BindingStrength
-      );
+      const result = await this.terminology.validateCode(coding.system, coding.code, binding.valueSet,
+        binding.strength as BindingStrength);
 
       if (!result.valid) {
 
