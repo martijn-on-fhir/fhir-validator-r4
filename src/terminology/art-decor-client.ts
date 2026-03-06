@@ -1,5 +1,8 @@
 // src/terminology/art-decor-client.ts
 
+import * as fsSync from 'fs';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import type { ValueSet, CodeSystem } from '../types/fhir';
 
 const ART_DECOR_BASE = 'https://decor.nictiz.nl/fhir';
@@ -9,10 +12,59 @@ export class ArtDecorClient {
   private baseUrl: string;
   private timeoutMs: number;
   private failedUrls = new Set<string>();
+  private cacheDir: string | null = null;
 
-  constructor(baseUrl: string = ART_DECOR_BASE, timeoutMs: number = 10_000) {
+  constructor(baseUrl: string = ART_DECOR_BASE, timeoutMs: number = 10_000, cacheDir?: string) {
     this.baseUrl = baseUrl;
     this.timeoutMs = timeoutMs;
+
+    if (cacheDir) {
+      this.cacheDir = cacheDir;
+
+      if (!fsSync.existsSync(cacheDir)) {
+        fsSync.mkdirSync(cacheDir, {recursive: true});
+      }
+    }
+  }
+
+  private getCachePath(url: string, type: string): string | null {
+    if (!this.cacheDir) {
+      return null;
+    }
+
+    const safe = url.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+    return path.join(this.cacheDir, `${type}_${safe}.json`);
+  }
+
+  private async readCache<T>(url: string, type: string): Promise<T | null> {
+    const cachePath = this.getCachePath(url, type);
+
+    if (!cachePath) {
+      return null;
+    }
+
+    try {
+      const content = await fs.readFile(cachePath, 'utf8');
+
+      return JSON.parse(content) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeCache(url: string, type: string, data: unknown): Promise<void> {
+    const cachePath = this.getCachePath(url, type);
+
+    if (!cachePath) {
+      return;
+    }
+
+    try {
+      await fs.writeFile(cachePath, JSON.stringify(data), 'utf8');
+    } catch {
+      // Ignore write errors
+    }
   }
 
   /**
@@ -28,6 +80,13 @@ export class ArtDecorClient {
     // Only fetch from art-decor-style URLs
     if (!this.isArtDecorValueSetUrl(url)) {
       return null;
+    }
+
+    // Check disk cache first
+    const cached = await this.readCache<ValueSet>(url, 'vs');
+
+    if (cached) {
+      return cached;
     }
 
     try {
@@ -46,6 +105,8 @@ export class ArtDecorClient {
 
         return null;
       }
+
+      await this.writeCache(url, 'vs', data);
 
       return data as unknown as ValueSet;
     } catch {
@@ -70,6 +131,13 @@ export class ArtDecorClient {
       return null;
     }
 
+    // Check disk cache first
+    const cached = await this.readCache<CodeSystem>(systemUrl, 'cs');
+
+    if (cached) {
+      return cached;
+    }
+
     try {
       const searchUrl = `${this.baseUrl}/CodeSystem?url=${encodeURIComponent(systemUrl)}`;
       const res = await this.fetchWithTimeout(searchUrl);
@@ -92,6 +160,8 @@ export class ArtDecorClient {
 
         return null;
       }
+
+      await this.writeCache(systemUrl, 'cs', cs);
 
       return cs as unknown as CodeSystem;
     } catch {

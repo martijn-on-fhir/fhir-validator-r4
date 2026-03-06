@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';
+import * as path from 'path';
 import { FhirPathEngine } from '../fhirpath/fhir-path-engine';
+import { FileIndex } from '../registry/file-index';
 import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
 import { StructuralValidator } from '../structural/structural-validator';
 import type { NictizTerminologyConfig } from '../terminology/nictiz-terminology-client';
@@ -22,6 +24,10 @@ export interface FhirValidatorOptions {
   severityOverrides?: SeverityOverrides;
   /** Accepted FHIR version (e.g. "4.0.1"). If set, resources with a different fhirVersion in meta are rejected. */
   fhirVersion?: string;
+  /** Path to store the index cache file (default: .fhir-index.json in first profiles dir) */
+  indexCachePath?: string;
+  /** Force eager loading of all files instead of lazy loading (default: false) */
+  eagerLoad?: boolean;
 }
 
 // Known dangerous keys that can cause prototype pollution
@@ -36,7 +42,15 @@ export class FhirValidator {
   private severityOverrides: SeverityOverrides;
   private fhirVersion?: string;
 
-  private constructor(options: TerminologyServiceOptions = {}, severityOverrides: SeverityOverrides = {}, fhirVersion?: string) {
+  private constructor(options: TerminologyServiceOptions = {}, severityOverrides: SeverityOverrides = {}, fhirVersion?: string, artDecorCacheDir?: string) {
+
+    // Auto-enable art-decor disk cache if a directory is provided
+    if (artDecorCacheDir && !options.artDecor?.cacheDir) {
+      options = {
+        ...options,
+        artDecor: {...options.artDecor, cacheDir: artDecorCacheDir},
+      };
+    }
 
     this.registry = new StructureDefinitionRegistry();
     this.terminology = new TerminologyService(options);
@@ -53,20 +67,59 @@ export class FhirValidator {
   /**
    * Factory method — loads profiles and terminology for use.
    * Directories are loaded in order (e.g. r4-core first, then nl-core).
+   * Uses lazy loading by default: only an index is built at startup,
+   * actual files are loaded on demand when resolve() or validateCode() needs them.
    */
   static async create(options: FhirValidatorOptions = {}): Promise<FhirValidator> {
 
-    const validator = new FhirValidator(options.terminology, options.severityOverrides, options.fhirVersion);
+    const allDirs = [...(options.profilesDirs ?? []), ...(options.terminologyDirs ?? [])];
+    const artDecorCacheDir = allDirs.length > 0
+      ? path.join(allDirs[0], '..', '.art-decor-cache')
+      : undefined;
 
-    for (const dir of options.profilesDirs ?? []) {
-      await validator.registry.loadFromDirectory(dir);
+    const validator = new FhirValidator(options.terminology, options.severityOverrides, options.fhirVersion, artDecorCacheDir);
+
+    if (options.eagerLoad || allDirs.length === 0) {
+      // Legacy eager loading
+      for (const dir of options.profilesDirs ?? []) {
+        await validator.registry.loadFromDirectory(dir);
+      }
+
+      for (const dir of options.terminologyDirs ?? []) {
+        await validator.terminology.loadFromDirectory(dir);
+      }
+
+      return validator;
     }
 
-    for (const dir of options.terminologyDirs ?? []) {
-      await validator.terminology.loadFromDirectory(dir);
+    // Lazy loading via index
+    const index = new FileIndex();
+    const cachePath = options.indexCachePath ?? path.join(allDirs[0], '..', '.fhir-index.json');
+    const loaded = await index.loadFromCache(cachePath, allDirs);
+
+    if (!loaded) {
+      await index.buildFromDirectories(allDirs);
+      await index.saveToCache(cachePath).catch(() => { /* ignore write errors */ });
     }
+
+    validator.registry.registerIndex(index.getEntries('StructureDefinition'));
+    validator.terminology.registerIndex([
+      ...index.getEntries('ValueSet'),
+      ...index.getEntries('CodeSystem'),
+    ]);
 
     return validator;
+  }
+
+  /**
+   * Preload all indexed files into memory using parallel async reads.
+   * Call this after create() when you plan to validate many resources (batch mode).
+   */
+  async preload(): Promise<void> {
+    await Promise.all([
+      this.registry.preload(),
+      this.terminology.preload(),
+    ]);
   }
 
   /**

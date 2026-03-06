@@ -2,10 +2,33 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type {StructureDefinition, ElementDefinition} from '../types/fhir';
+import type {IndexEntry} from './file-index';
 
 export class StructureDefinitionRegistry {
 
   private definitions = new Map<string, StructureDefinition>();
+  /** Maps lookup key (url/name/id) → filePath for lazy loading */
+  private lazyIndex = new Map<string, string>();
+  /** Tracks which files have already been loaded */
+  private loadedFiles = new Set<string>();
+
+  /**
+   * Register index entries for lazy loading.
+   * Files are not read until resolve() is called.
+   */
+  registerIndex(entries: IndexEntry[]): void {
+    for (const entry of entries) {
+      this.lazyIndex.set(entry.url, entry.filePath);
+
+      if (entry.name) {
+        this.lazyIndex.set(entry.name, entry.filePath);
+      }
+
+      if (entry.id) {
+        this.lazyIndex.set(entry.id, entry.filePath);
+      }
+    }
+  }
 
   /**
    * Load all StructureDefinitions from a directory (recursive)
@@ -54,13 +77,28 @@ export class StructureDefinitionRegistry {
   }
 
   /**
-   * Resolve by URL, name or id
+   * Resolve by URL, name or id — loads from disk on first access if indexed.
    */
   resolve(urlOrName: string): StructureDefinition | undefined {
     // Strip version suffix if present: url|4.0.1 -> url
     const clean = urlOrName.split('|')[0];
 
-    return this.definitions.get(clean);
+    const cached = this.definitions.get(clean);
+
+    if (cached) {
+      return cached;
+    }
+
+    // Try lazy loading from index
+    const filePath = this.lazyIndex.get(clean);
+
+    if (filePath && !this.loadedFiles.has(filePath)) {
+      this.loadFileSync(filePath);
+
+      return this.definitions.get(clean);
+    }
+
+    return undefined;
   }
 
   /**
@@ -103,10 +141,69 @@ export class StructureDefinitionRegistry {
    * Return all registered URLs
    */
   listUrls(): string[] {
-    return Array.from(this.definitions.keys()).filter(k => k.startsWith('http'));
+    // Include both loaded and indexed URLs
+    const urls = new Set<string>();
+
+    for (const key of this.definitions.keys()) {
+      if (key.startsWith('http')) {
+        urls.add(key);
+      }
+    }
+
+    for (const key of this.lazyIndex.keys()) {
+      if (key.startsWith('http')) {
+        urls.add(key);
+      }
+    }
+
+    return Array.from(urls);
   }
 
   size(): number {
     return this.listUrls().length;
+  }
+
+  /**
+   * Preload all indexed files into memory (parallel async reads).
+   * Call after create() for batch validation scenarios.
+   */
+  async preload(): Promise<void> {
+    const filePaths = new Set(this.lazyIndex.values());
+    const unloaded = [...filePaths].filter(f => !this.loadedFiles.has(f));
+
+    await Promise.all(unloaded.map(async (filePath) => {
+      this.loadedFiles.add(filePath);
+
+      try {
+        const content = await fs.readFile(filePath, 'utf8');
+        const json = JSON.parse(content);
+
+        if (json.resourceType === 'StructureDefinition') {
+          this.register(json as StructureDefinition);
+        }
+      } catch {
+        // Skip invalid files
+      }
+    }));
+  }
+
+  /**
+   * Synchronously load a file and register its StructureDefinition.
+   * Uses readFileSync for simplicity in the resolve() hot path.
+   */
+  private loadFileSync(filePath: string): void {
+    this.loadedFiles.add(filePath);
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const content = require('fs').readFileSync(filePath, 'utf8');
+      const json = JSON.parse(content);
+
+      if (json.resourceType === 'StructureDefinition') {
+        this.register(json as StructureDefinition);
+      }
+    } catch {
+      // Skip invalid files
+    }
   }
 }

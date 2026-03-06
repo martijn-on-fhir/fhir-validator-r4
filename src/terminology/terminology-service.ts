@@ -1,6 +1,7 @@
 // src/terminology/terminology-service.ts
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import type {IndexEntry} from '../registry/file-index';
 import type {
   ValueSet,
   CodeSystem,
@@ -86,6 +87,8 @@ export interface TerminologyServiceOptions {
     timeoutMs?: number;
     /** Disable art-decor lookups (default: false) */
     disabled?: boolean;
+    /** Directory to cache Art-Decor responses on disk */
+    cacheDir?: string;
   };
 }
 
@@ -96,6 +99,11 @@ export class TerminologyService {
   private options: TerminologyServiceOptions;
   private nictizClient: NictizTerminologyClient | null = null;
   private artDecorClient: ArtDecorClient | null = null;
+
+  /** Maps url → filePath for lazy loading */
+  private lazyValueSetIndex = new Map<string, string>();
+  private lazyCodeSystemIndex = new Map<string, string>();
+  private loadedFiles = new Set<string>();
 
   // Cache for external lookups
   private externalCache = new Map<string, CodeValidationResult>();
@@ -117,6 +125,7 @@ export class TerminologyService {
       this.artDecorClient = new ArtDecorClient(
         options.artDecor?.baseUrl,
         options.artDecor?.timeoutMs,
+        options.artDecor?.cacheDir,
       );
     }
   }
@@ -160,6 +169,20 @@ export class TerminologyService {
     }
   }
 
+  /**
+   * Register index entries for lazy loading.
+   * Files are not read until validateCode() needs them.
+   */
+  registerIndex(entries: IndexEntry[]): void {
+    for (const entry of entries) {
+      if (entry.resourceType === 'ValueSet') {
+        this.lazyValueSetIndex.set(entry.url, entry.filePath);
+      } else if (entry.resourceType === 'CodeSystem') {
+        this.lazyCodeSystemIndex.set(entry.url, entry.filePath);
+      }
+    }
+  }
+
   registerValueSet(vs: ValueSet): void {
     this.valueSets.set(vs.url, vs);
   }
@@ -168,19 +191,35 @@ export class TerminologyService {
     this.codeSystems.set(cs.url, cs);
   }
 
+  /** Cache for validateCode results to avoid duplicate lookups */
+  private validateCodeCache = new Map<string, CodeValidationResult>();
+
   /**
-   * Validate a code against a binding
+   * Validate a code against a binding (cached — identical lookups return instantly)
    */
   async validateCode(rawSystem: string, code: string, valueSetUrl?: string, bindingStrength: BindingStrength = 'required'): Promise<CodeValidationResult> {
 
-    // Resolve system aliases (e.g. urn:oid:1.0.639.1 → http://terminology.hl7.org/CodeSystem/iso639-1)
     const system = SYSTEM_ALIASES[rawSystem] ?? rawSystem;
+    const cacheKey = `${system}|${code}|${valueSetUrl ?? ''}|${bindingStrength}`;
+    const cached = this.validateCodeCache.get(cacheKey);
+
+    if (cached) {
+      return cached;
+    }
+
+    const result = await this.doValidateCode(system, code, valueSetUrl, bindingStrength);
+    this.validateCodeCache.set(cacheKey, result);
+
+    return result;
+  }
+
+  private async doValidateCode(system: string, code: string, valueSetUrl?: string, bindingStrength: BindingStrength = 'required'): Promise<CodeValidationResult> {
 
     // 1. Validate via ValueSet if specified
     if (valueSetUrl) {
       // Strip version suffix (e.g., "|4.0.1") for lookup
       const vsUrlClean = valueSetUrl.split('|')[0];
-      const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
+      const vs = this.getValueSet(valueSetUrl) ?? this.getValueSet(vsUrlClean);
 
       const resolvedVs = vs ?? await this.resolveValueSetFromArtDecor(vsUrlClean);
 
@@ -199,7 +238,7 @@ export class TerminologyService {
         // If the system is trusted (e.g. ISO 639) and the ValueSet doesn't enumerate
         // codes for it (just references the system), accept — failure is due to missing
         // CodeSystem data, not an actually invalid code
-        if (TRUSTED_SYSTEMS.has(system) && !this.codeSystems.has(system)
+        if (TRUSTED_SYSTEMS.has(system) && !this.getCodeSystem(system)
             && !this.valueSetHasExplicitCodes(resolvedVs, system)) {
           return {valid: true};
         }
@@ -231,7 +270,7 @@ export class TerminologyService {
     }
 
     // 2. Validate directly against CodeSystem
-    const cs = this.codeSystems.get(system) ?? await this.resolveCodeSystemFromArtDecor(system);
+    const cs = this.getCodeSystem(system) ?? await this.resolveCodeSystemFromArtDecor(system);
 
     if (cs) {
       return this.validateAgainstCodeSystem(code, cs);
@@ -299,7 +338,7 @@ export class TerminologyService {
 
       // Nested ValueSets
       for (const nestedUrl of include.valueSet ?? []) {
-        const nested = this.valueSets.get(nestedUrl);
+        const nested = this.getValueSet(nestedUrl);
 
         if (nested) {
           const result = this.validateAgainstValueSet(system, code, nested);
@@ -312,7 +351,7 @@ export class TerminologyService {
 
       // No filter and no explicit codes: validate via CodeSystem
       if (!include.concept && !include.filter) {
-        const cs = this.codeSystems.get(system);
+        const cs = this.getCodeSystem(system);
 
         if (cs) {
           return this.validateAgainstCodeSystem(code, cs);
@@ -465,7 +504,7 @@ export class TerminologyService {
   inferSystemFromValueSet(valueSetUrl: string): string | undefined {
 
     const vsUrlClean = valueSetUrl.split('|')[0];
-    const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
+    const vs = this.getValueSet(valueSetUrl) ?? this.getValueSet(vsUrlClean);
 
     if (!vs) {
       return undefined;
@@ -481,7 +520,7 @@ export class TerminologyService {
   inferSystemsFromValueSet(valueSetUrl: string): string[] {
 
     const vsUrlClean = valueSetUrl.split('|')[0];
-    const vs = this.valueSets.get(valueSetUrl) ?? this.valueSets.get(vsUrlClean);
+    const vs = this.getValueSet(valueSetUrl) ?? this.getValueSet(vsUrlClean);
 
     if (!vs) {
       return [];
@@ -535,7 +574,7 @@ export class TerminologyService {
 
       // Also register any CodeSystems referenced in compose.include that have explicit concepts
       for (const include of vs.compose?.include ?? []) {
-        if (include.system && include.concept?.length && !this.codeSystems.has(include.system)) {
+        if (include.system && include.concept?.length && !this.getCodeSystem(include.system)) {
           this.registerCodeSystem({
             resourceType: 'CodeSystem',
             url: include.system,
@@ -566,6 +605,92 @@ export class TerminologyService {
     }
 
     return cs;
+  }
+
+  /**
+   * Get a ValueSet by URL, lazily loading from disk if indexed.
+   */
+  private getValueSet(url: string): ValueSet | undefined {
+    const cached = this.valueSets.get(url);
+
+    if (cached) {
+      return cached;
+    }
+
+    const filePath = this.lazyValueSetIndex.get(url);
+
+    if (filePath && !this.loadedFiles.has(filePath)) {
+      this.loadFileSync(filePath);
+
+      return this.valueSets.get(url);
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Get a CodeSystem by URL, lazily loading from disk if indexed.
+   */
+  private getCodeSystem(url: string): CodeSystem | undefined {
+    const cached = this.codeSystems.get(url);
+
+    if (cached) {
+      return cached;
+    }
+
+    const filePath = this.lazyCodeSystemIndex.get(url);
+
+    if (filePath && !this.loadedFiles.has(filePath)) {
+      this.loadFileSync(filePath);
+
+      return this.codeSystems.get(url);
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Preload all indexed files into memory (parallel async reads).
+   * Call after create() for batch validation scenarios.
+   */
+  async preload(): Promise<void> {
+    const filePaths = new Set([...this.lazyValueSetIndex.values(), ...this.lazyCodeSystemIndex.values()]);
+    const unloaded = [...filePaths].filter(f => !this.loadedFiles.has(f));
+
+    await Promise.all(unloaded.map(async (filePath) => {
+      this.loadedFiles.add(filePath);
+
+      try {
+        const content = await fs.readFile(filePath, 'utf8');
+        const json = JSON.parse(content);
+
+        if (json.resourceType === 'ValueSet') {
+          this.registerValueSet(json as ValueSet);
+        } else if (json.resourceType === 'CodeSystem') {
+          this.registerCodeSystem(json as CodeSystem);
+        }
+      } catch {
+        // Skip invalid files
+      }
+    }));
+  }
+
+  private loadFileSync(filePath: string): void {
+    this.loadedFiles.add(filePath);
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const content = require('fs').readFileSync(filePath, 'utf8');
+      const json = JSON.parse(content);
+
+      if (json.resourceType === 'ValueSet') {
+        this.registerValueSet(json as ValueSet);
+      } else if (json.resourceType === 'CodeSystem') {
+        this.registerCodeSystem(json as CodeSystem);
+      }
+    } catch {
+      // Skip invalid files
+    }
   }
 
   stats(): { valueSets: number; codeSystems: number; cachedLookups: number; nictizConfigured: boolean } {
