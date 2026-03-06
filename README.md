@@ -15,6 +15,9 @@ A TypeScript/Node.js library for validating FHIR R4 resources against StructureD
 - **FHIRPath constraints** — evaluates FHIRPath invariant expressions
 - **Slicing support** — handles discriminated slicing (value, type, pattern discriminators)
 - **Fixed & pattern value checks** — enforces fixedCoding, patternIdentifier, etc.
+- **Lazy loading with file index** — builds a lightweight index on first run, loads files on demand (~230x faster startup)
+- **Art-Decor disk cache** — caches HTTP responses to disk, eliminating repeated network calls (~30x faster batch validation)
+- **Preload for batch mode** — `preload()` loads all indexed files in parallel for maximum throughput
 - **Multi-directory loading** — load profiles and terminology from multiple directories in order (base first, overlays second)
 - **BSN elfproef** — validates Dutch citizen service numbers using the 11-test algorithm
 - **Security** — prototype pollution detection, error message sanitization (no PHI leakage)
@@ -54,6 +57,21 @@ const result = await validator.validate({
 console.log(result.valid);        // true or false
 console.log(result.validationId); // "a1b2c3d4-..."
 console.log(result.issues);      // ValidationIssue[]
+```
+
+### Batch Validation (with preload)
+
+For validating many resources, call `preload()` after `create()` to load all profiles and terminology into memory in parallel:
+
+```typescript
+const validator = await FhirValidator.create({
+  profilesDirs: ['profiles/r4-core', 'profiles/nl-core'],
+  terminologyDirs: ['terminology/r4-core', 'terminology/nl-core'],
+});
+
+await validator.preload(); // parallel async bulk load
+
+const results = await validator.validateBatch(resources);
 ```
 
 ### With Nictiz Terminologieserver
@@ -128,8 +146,11 @@ Factory method that creates a validator and loads profiles/terminology.
 | `terminology.artDecor.baseUrl` | `string` | Art-decor FHIR base URL (default: `https://decor.nictiz.nl/fhir`) |
 | `terminology.artDecor.timeoutMs` | `number` | Art-decor fetch timeout (default: 10000) |
 | `terminology.artDecor.disabled` | `boolean` | Disable art-decor auto-resolution |
+| `terminology.artDecor.cacheDir` | `string` | Directory to cache Art-Decor HTTP responses on disk |
 | `severityOverrides` | `Record<string, IssueSeverity>` | Override severity per issue code |
 | `fhirVersion` | `string` | Accepted FHIR version (e.g. `"4.0.1"`) |
+| `indexCachePath` | `string` | Path for the file index cache (default: `.fhir-index.json` next to first profiles dir) |
+| `eagerLoad` | `boolean` | Force eager loading of all files instead of lazy loading (default: `false`) |
 
 ### `FhirValidator.loadConfig(path)`
 
@@ -157,6 +178,10 @@ interface ValidationIssue {
   expression?: string;
 }
 ```
+
+### `validator.preload()`
+
+Loads all indexed profiles and terminology into memory using parallel async reads. Call this after `create()` when validating many resources in batch mode.
 
 ### `validator.validateBatch(resources)`
 
@@ -304,6 +329,28 @@ const validator = await FhirValidator.create({
 ```
 
 The validator recursively scans all subdirectories for `.json` files.
+
+## Performance
+
+The validator uses a multi-layered caching strategy to minimize startup time and avoid redundant I/O:
+
+| Layer | What it does | Cache file |
+|---|---|---|
+| **File index** | Scans directories once, stores metadata (url, name, id, filePath) | `.fhir-index.json` |
+| **Lazy loading** | Loads JSON files from disk only when `resolve()` or `validateCode()` needs them | in-memory |
+| **Preload** | Bulk-loads all indexed files in parallel (for batch scenarios) | in-memory |
+| **validateCode cache** | Deduplicates identical terminology lookups within a session | in-memory |
+| **Art-Decor disk cache** | Saves HTTP responses from `decor.nictiz.nl` to disk | `.art-decor-cache/` |
+
+### Benchmarks (822 profiles + 2386 terminology files, 171 sample resources)
+
+| Scenario | `create()` | 171x `validate()` | Total |
+|---|---|---|---|
+| Eager loading (no cache) | 2129ms | ~65s | ~67s |
+| Lazy + cached index | 9ms | ~65s | ~65s |
+| Lazy + cached index + Art-Decor cache | 9ms | 2.2s | **2.2s** |
+
+The first run populates the Art-Decor disk cache (~65s with HTTP calls). Subsequent runs skip all network requests and complete in ~2 seconds.
 
 ## Development
 
