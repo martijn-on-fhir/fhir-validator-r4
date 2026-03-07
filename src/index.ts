@@ -7,6 +7,7 @@ export { NictizTerminologyClient, type NictizTerminologyConfig } from './termino
 export { ArtDecorClient } from './terminology/art-decor-client';
 export { FhirPathEngine } from './fhirpath/fhir-path-engine';
 export { StructuralValidator } from './structural/structural-validator';
+export { ValidationRunner, type RunnerSummary, type FileResult, type FileError, type RunnerProgress, type ValidationRunnerEvents } from './runner/validation-runner';
 export type {
   ValidationResult,
   ValidationIssue,

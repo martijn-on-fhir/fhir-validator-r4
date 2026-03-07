@@ -74,6 +74,73 @@ await validator.preload(); // parallel async bulk load
 const results = await validator.validateBatch(resources);
 ```
 
+### Event-Based Validation (ValidationRunner)
+
+The `ValidationRunner` validates files or directories and emits typed events as each file is processed. It extends Node's `EventEmitter`, so there is no performance overhead — events are dispatched synchronously.
+
+```typescript
+import { FhirValidator, ValidationRunner } from 'fhir-validator-mx';
+
+const validator = await FhirValidator.create({
+  profilesDirs: ['profiles/r4-core', 'profiles/nl-core'],
+  terminologyDirs: ['terminology/r4-core', 'terminology/nl-core'],
+});
+
+const runner = new ValidationRunner(validator);
+
+runner.on('pass', ({ file, result }) => {
+  console.log(`PASS ${file}`);
+});
+
+runner.on('fail', ({ file, result }) => {
+  console.log(`FAIL ${file}`);
+  for (const issue of result.issues) {
+    console.log(`  [${issue.severity}] ${issue.path}: ${issue.message}`);
+  }
+});
+
+runner.on('error', ({ file, error }) => {
+  console.log(`ERROR ${file}: ${error.message}`);
+});
+
+runner.on('progress', ({ current, total, file }) => {
+  console.log(`${current}/${total} ${file}`);
+});
+
+runner.on('finish', (summary) => {
+  console.log(`Done: ${summary.passed} passed, ${summary.failed} failed (${summary.elapsedMs}ms)`);
+});
+
+// Validate a directory or single file
+const summary = await runner.run('path/to/resources/');
+
+// Or validate an explicit list of files
+const summary2 = await runner.validateFiles(['/path/to/Patient.json', '/path/to/Observation.json']);
+```
+
+#### Events
+
+| Event | Payload | Description |
+|---|---|---|
+| `pass` | `{ file: string, result: ValidationResult }` | Resource passed validation |
+| `fail` | `{ file: string, result: ValidationResult }` | Resource failed validation (has errors) |
+| `error` | `{ file: string, error: Error }` | File could not be read or parsed |
+| `skip` | `{ file: string, reason: string }` | File skipped (e.g. no `resourceType`) |
+| `progress` | `{ current: number, total: number, file: string }` | Emitted before each file is validated |
+| `finish` | `RunnerSummary` | All files processed |
+
+The `RunnerSummary` returned by `finish` (and by the `run()`/`validateFiles()` return value) contains:
+
+```typescript
+interface RunnerSummary {
+  passed: number;
+  failed: number;
+  skipped: number;
+  total: number;
+  elapsedMs: number;
+}
+```
+
 ### With Nictiz Terminologieserver
 
 The validator can fall back to the Dutch national terminology server for codes that can't be validated locally (e.g. SNOMED CT codes referenced by broad ValueSets like `observation-codes`).

@@ -1,7 +1,6 @@
 import * as path from 'path';
-import * as fs from 'fs';
-import { FhirValidator } from '../dist';
-import type { ValidationResult, ValidationIssue } from '../dist';
+import { FhirValidator, ValidationRunner } from '../dist';
+import type { ValidationResult } from '../dist';
 
 // ANSI color helpers
 const colors = {
@@ -21,24 +20,24 @@ const colors = {
 const c = (color: keyof typeof colors, text: string) => `${colors[color]}${text}${colors.reset}`;
 
 /** Returns the ANSI color code for a given validation issue severity */
-function severityColor(severity: string): string {
+const severityColor = (severity: string): string => {
   switch (severity) {
     case 'error': return colors.red;
     case 'warning': return colors.yellow;
     case 'information': return colors.cyan;
     default: return colors.white;
   }
-}
+};
 
 /** Returns a single-character icon representing the issue severity (x, !, i) */
-function severityIcon(severity: string): string {
+const severityIcon = (severity: string): string => {
   switch (severity) {
     case 'error': return 'x';
     case 'warning': return '!';
     case 'information': return 'i';
     default: return '-';
   }
-}
+};
 
 /**
  * Prints a color-coded validation result for a single file.
@@ -92,25 +91,6 @@ function showProgress(current: number, total: number, filePath: string): void {
   const rel = path.basename(filePath);
   const truncated = rel.length > 40 ? rel.slice(0, 37) + '...' : rel;
   process.stderr.write(`\r  ${c('dim', `[${bar}]`)} ${pct}% (${current}/${total}) ${c('dim', truncated)}`);
-}
-
-/**
- * Recursively collects all .json files from a directory tree.
- * @param dirPath - Root directory to scan
- * @returns Array of absolute paths to JSON files
- */
-function collectJsonFiles(dirPath: string): string[] {
-  const files: string[] = [];
-  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...collectJsonFiles(full));
-    } else if (entry.isFile() && entry.name.endsWith('.json')) {
-      files.push(full);
-    }
-  }
-  return files;
 }
 
 /** Prints CLI usage instructions and available options to stdout */
@@ -194,85 +174,42 @@ async function main(): Promise<void> {
   const stats = validator.stats();
   console.log(c('dim', `Loaded ${stats.profiles} profiles, ${stats.valueSets} value sets, ${stats.codeSystems} code systems\n`));
 
-  // Collect files
-  const stat = fs.statSync(target);
-  const files = stat.isDirectory() ? collectJsonFiles(target) : [target];
-  const isDir = stat.isDirectory();
+  // Create runner and wire up events
+  const runner = new ValidationRunner(validator);
+  let isDir = false;
 
-  if (files.length === 0) {
-    console.log(c('yellow', 'No JSON files found.'));
-    process.exit(0);
-  }
+  try {
+    const fs = await import('fs');
+    isDir = fs.statSync(target).isDirectory();
+  } catch { /* target doesn't exist — runner.run() will emit error */ }
 
   if (isDir) {
-    console.log(c('bold', `Validating ${files.length} file${files.length !== 1 ? 's' : ''}...\n`));
+    runner.on('progress', ({ current, total, file }) => showProgress(current, total, file));
   }
 
-  // Preload for batch
-  if (files.length > 1) {
-    await validator.preload();
-  }
-
-  let passed = 0;
-  let failed = 0;
-  const startTime = Date.now();
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-
-    if (isDir) {
-      showProgress(i + 1, files.length, file);
-    }
-
-    let raw: string;
-    try {
-      raw = fs.readFileSync(file, 'utf8');
-    } catch {
-      clearLine();
-      console.log(`  ${c('red', 'FAIL')} ${c('bold', path.relative(process.cwd(), file))}`);
-      console.log(`       ${c('red', 'x')} Could not read file`);
-      failed++;
-      continue;
-    }
-
-    let resource: unknown;
-    try {
-      resource = JSON.parse(raw);
-    } catch {
-      clearLine();
-      console.log(`  ${c('red', 'FAIL')} ${c('bold', path.relative(process.cwd(), file))}`);
-      console.log(`       ${c('red', 'x')} Invalid JSON`);
-      failed++;
-      continue;
-    }
-
-    // Skip non-resource JSON (e.g. StructureDefinitions, ValueSets)
-    const rt = (resource as Record<string, unknown>).resourceType as string | undefined;
-    if (!rt) {
-      continue;
-    }
-
-    const result = await validator.validate(resource);
-
-    if (isDir) {
-      clearLine();
-    }
-
+  runner.on('pass', ({ file, result }) => {
+    if (isDir) clearLine();
     printResult(file, result);
+  });
 
-    if (result.valid) {
-      passed++;
-    } else {
-      failed++;
-    }
-  }
+  runner.on('fail', ({ file, result }) => {
+    if (isDir) clearLine();
+    printResult(file, result);
+  });
 
-  // Summary
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  runner.on('error', ({ file, error }) => {
+    if (isDir) clearLine();
+    console.log(`  ${c('red', 'FAIL')} ${c('bold', path.relative(process.cwd(), file))}`);
+    console.log(`       ${c('red', 'x')} ${error.message}`);
+  });
+
+  const summary = await runner.run(target);
+
+  const elapsed = (summary.elapsedMs / 1000).toFixed(1);
   console.log(`\n${c('bold', '─── Summary ───')}`);
-  console.log(`  ${c('green', `${passed} passed`)}  ${failed > 0 ? c('red', `${failed} failed`) : c('dim', '0 failed')}  ${c('dim', `(${elapsed}s)`)}`);
+  console.log(`  ${c('green', `${summary.passed} passed`)}  ${summary.failed > 0 ? c('red', `${summary.failed} failed`) : c('dim', '0 failed')}  ${c('dim', `(${elapsed}s)`)}`);
 
-  process.exit(failed > 0 ? 1 : 0);
+  process.exit(summary.failed > 0 ? 1 : 0);
 }
 
 main().catch((err: Error) => {
