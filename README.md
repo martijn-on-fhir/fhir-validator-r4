@@ -352,6 +352,28 @@ The validator uses a multi-layered caching strategy to minimize startup time and
 
 The first run populates the Art-Decor disk cache (~65s with HTTP calls). Subsequent runs skip all network requests and complete in ~2 seconds.
 
+## CLI
+
+Validate FHIR resources from the command line with colored output and progress tracking.
+
+```bash
+# Validate a single file
+npm run validate -- samples/data/nl-core-Patient-01.json
+
+# Validate all JSON files in a directory (with progress bar)
+npm run validate -- samples/data/
+
+# Custom profile and terminology directories
+npm run validate -- samples/data/ --profiles-dir ./my-profiles --terminology-dir ./my-terminology
+
+# Use a specific config file
+npm run validate -- samples/data/ --config ./config.local.json
+```
+
+Output uses colors to indicate status: green for `PASS`, red for `FAIL`, yellow for warnings, and cyan for informational messages. When validating a directory, a progress bar shows completion status.
+
+The exit code is `1` if any file fails validation, `0` if all pass.
+
 ## Development
 
 ```bash
@@ -361,6 +383,7 @@ npm run build:types  # Type declarations only
 npm test             # Run tests (30 tests)
 npm run dev          # Run via ts-node
 npm run lint         # ESLint
+npm run validate     # CLI validator (see CLI section)
 ```
 
 ## License
