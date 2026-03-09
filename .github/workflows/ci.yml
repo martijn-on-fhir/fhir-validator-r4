@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [master]
-    tags: ['v*']
   pull_request:
     branches: [master]
 
@@ -38,14 +37,16 @@ jobs:
 
   publish:
     needs: lint-and-test
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/master' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -55,6 +56,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Bump patch version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm version patch -m "v%s [skip ci]"
+          git push --follow-tags
 
       - name: Build
         run: npm run build
