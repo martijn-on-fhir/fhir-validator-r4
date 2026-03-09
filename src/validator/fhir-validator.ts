@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';
-import * as path from 'path';
 import { FhirPathEngine } from '../fhirpath/fhir-path-engine';
 import { FileIndex } from '../registry/file-index';
 import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
@@ -24,7 +23,7 @@ export interface FhirValidatorOptions {
   severityOverrides?: SeverityOverrides;
   /** Accepted FHIR version (e.g. "4.0.1"). If set, resources with a different fhirVersion in meta are rejected. */
   fhirVersion?: string;
-  /** Path to store the index cache file (default: .fhir-index.json in first profiles dir) */
+  /** Path to store the index cache file. If omitted, no index is written to disk. */
   indexCachePath?: string;
   /** Force eager loading of all files instead of lazy loading (default: false) */
   eagerLoad?: boolean;
@@ -42,16 +41,7 @@ export class FhirValidator {
   private severityOverrides: SeverityOverrides;
   private fhirVersion?: string;
 
-  private constructor(options: TerminologyServiceOptions = {}, severityOverrides: SeverityOverrides = {}, fhirVersion?: string, artDecorCacheDir?: string) {
-
-    // Auto-enable art-decor disk cache if a directory is provided
-    if (artDecorCacheDir && !options.artDecor?.cacheDir) {
-      options = {
-        ...options,
-        artDecor: {...options.artDecor, cacheDir: artDecorCacheDir},
-      };
-    }
-
+  private constructor(options: TerminologyServiceOptions = {}, severityOverrides: SeverityOverrides = {}, fhirVersion?: string) {
     this.registry = new StructureDefinitionRegistry();
     this.terminology = new TerminologyService(options);
     this.fhirPath = new FhirPathEngine();
@@ -73,9 +63,8 @@ export class FhirValidator {
   static async create(options: FhirValidatorOptions = {}): Promise<FhirValidator> {
 
     const allDirs = [...(options.profilesDirs ?? []), ...(options.terminologyDirs ?? [])];
-    const artDecorCacheDir = allDirs.length > 0 ? path.join(allDirs[0], '..', '.art-decor-cache') : undefined;
 
-    const validator = new FhirValidator(options.terminology, options.severityOverrides, options.fhirVersion, artDecorCacheDir);
+    const validator = new FhirValidator(options.terminology, options.severityOverrides, options.fhirVersion);
 
     if (options.eagerLoad || allDirs.length === 0) {
       // Legacy eager loading
@@ -92,12 +81,15 @@ export class FhirValidator {
 
     // Lazy loading via index
     const index = new FileIndex();
-    const cachePath = options.indexCachePath ?? path.join(allDirs[0], '..', '.fhir-index.json');
-    const loaded = await index.loadFromCache(cachePath, allDirs);
+    const cachePath = options.indexCachePath;
+    const loaded = cachePath ? await index.loadFromCache(cachePath, allDirs) : false;
 
     if (!loaded) {
       await index.buildFromDirectories(allDirs);
-      await index.saveToCache(cachePath).catch(() => { /* ignore write errors */ });
+
+      if (cachePath) {
+        await index.saveToCache(cachePath).catch(() => { /* ignore write errors */ });
+      }
     }
 
     validator.registry.registerIndex(index.getEntries('StructureDefinition'));

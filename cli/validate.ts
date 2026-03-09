@@ -169,7 +169,11 @@ async function main(): Promise<void> {
   const validator = await FhirValidator.create({
     profilesDirs,
     terminologyDirs,
-    terminology: { nictiz: config?.terminology },
+    terminology: {
+      nictiz: config?.terminology,
+      artDecor: { cacheDir: path.join(root, '.art-decor-cache') },
+    },
+    indexCachePath: path.join(root, '.fhir-index.json'),
   });
   const stats = validator.stats();
   console.log(c('dim', `Loaded ${stats.profiles} profiles, ${stats.valueSets} value sets, ${stats.codeSystems} code systems\n`));

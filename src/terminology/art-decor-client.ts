@@ -1,6 +1,5 @@
 // src/terminology/art-decor-client.ts
 
-import * as fsSync from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { ValueSet, CodeSystem } from '../types/fhir';
@@ -20,10 +19,6 @@ export class ArtDecorClient {
 
     if (cacheDir) {
       this.cacheDir = cacheDir;
-
-      if (!fsSync.existsSync(cacheDir)) {
-        fsSync.mkdirSync(cacheDir, {recursive: true});
-      }
     }
   }
 
@@ -61,6 +56,7 @@ export class ArtDecorClient {
     }
 
     try {
+      await fs.mkdir(path.dirname(cachePath), {recursive: true});
       await fs.writeFile(cachePath, JSON.stringify(data), 'utf8');
     } catch {
       // Ignore write errors

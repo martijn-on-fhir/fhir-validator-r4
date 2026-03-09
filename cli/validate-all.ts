@@ -25,7 +25,11 @@ async function main(): Promise<void> {
       path.join(root, 'terminology', 'r4-core'),
       path.join(root, 'terminology', 'nl-core'),
     ],
-    terminology: { nictiz: config?.terminology },
+    terminology: {
+      nictiz: config?.terminology,
+      artDecor: { cacheDir: path.join(root, '.art-decor-cache') },
+    },
+    indexCachePath: path.join(root, '.fhir-index.json'),
   });
 
   // Collect all JSON files

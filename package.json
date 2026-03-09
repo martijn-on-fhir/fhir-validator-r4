@@ -12,8 +12,6 @@
   },
   "files": [
     "dist/",
-    "profiles/",
-    "terminology/",
     "README.md",
     "LICENSE",
     "config.example.json"
