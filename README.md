@@ -34,8 +34,94 @@ A TypeScript/Node.js library for validating FHIR R4 resources against StructureD
 ## Installation
 
 ```bash
-npm install
+npm install fhir-validator-mx
 ```
+
+This installs the validator library only. FHIR profiles and terminology data are **not included** — you provide your own (see [Setting up FHIR definitions](#setting-up-fhir-definitions) below).
+
+## Setting up FHIR definitions
+
+The validator needs StructureDefinition, ValueSet and CodeSystem JSON files to validate against. You must download these yourself and point the validator at the directories containing them.
+
+### 1. Download FHIR R4 core definitions
+
+```bash
+curl -LO https://hl7.org/fhir/R4/definitions.json.zip
+
+# Extract StructureDefinitions
+mkdir -p profiles/r4-core
+unzip -j definitions.json.zip "profiles-resources.json" "profiles-types.json" -d /tmp/fhir-r4
+node -e "
+  const fs = require('fs');
+  for (const f of ['profiles-resources', 'profiles-types']) {
+    const bundle = JSON.parse(fs.readFileSync('/tmp/fhir-r4/' + f + '.json', 'utf8'));
+    for (const entry of bundle.entry || []) {
+      const r = entry.resource;
+      if (r.resourceType === 'StructureDefinition') {
+        fs.writeFileSync('profiles/r4-core/StructureDefinition-' + r.id + '.json', JSON.stringify(r, null, 2));
+      }
+    }
+  }
+"
+
+# Extract ValueSets and CodeSystems
+mkdir -p terminology/r4-core
+unzip -j definitions.json.zip "valuesets.json" -d /tmp/fhir-r4
+node -e "
+  const fs = require('fs');
+  const bundle = JSON.parse(fs.readFileSync('/tmp/fhir-r4/valuesets.json', 'utf8'));
+  for (const entry of bundle.entry || []) {
+    const r = entry.resource;
+    if (r.resourceType === 'ValueSet') {
+      fs.writeFileSync('terminology/r4-core/ValueSet-' + r.id + '.json', JSON.stringify(r, null, 2));
+    } else if (r.resourceType === 'CodeSystem') {
+      fs.writeFileSync('terminology/r4-core/CodeSystem-' + r.id + '.json', JSON.stringify(r, null, 2));
+    }
+  }
+"
+```
+
+### 2. (Optional) Download nl-core profiles
+
+The Dutch nl-core profiles are published by Nictiz on the Simplifier registry:
+
+```bash
+npm --registry https://packages.simplifier.net pack nictiz.fhir.nl.r4.nl-core
+
+mkdir -p profiles/nl-core terminology/nl-core
+tar xzf nictiz.fhir.nl.r4.nl-core-*.tgz
+node -e "
+  const fs = require('fs');
+  for (const f of fs.readdirSync('package')) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const r = JSON.parse(fs.readFileSync('package/' + f, 'utf8'));
+      if (r.resourceType === 'StructureDefinition') {
+        fs.copyFileSync('package/' + f, 'profiles/nl-core/' + f);
+      } else if (r.resourceType === 'ValueSet' || r.resourceType === 'CodeSystem') {
+        fs.copyFileSync('package/' + f, 'terminology/nl-core/' + f);
+      }
+    } catch {}
+  }
+"
+rm -rf package nictiz.fhir.nl.r4.nl-core-*.tgz
+```
+
+### 3. Directory layout
+
+After downloading, your directory structure should look like this:
+
+```
+your-project/
+  profiles/
+    r4-core/      — Base FHIR R4 StructureDefinitions (~658 files)
+    nl-core/      — nl-core profile overlays (~164 files, optional)
+  terminology/
+    r4-core/      — Base FHIR R4 ValueSets and CodeSystems (~2378 files)
+    nl-core/      — nl-core terminology (~8 files, optional)
+```
+
+Directories are loaded in order — base definitions first so that profile overlays can inherit from them.
 
 ## Quick Start
 
@@ -216,7 +302,7 @@ Factory method that creates a validator and loads profiles/terminology.
 | `terminology.artDecor.cacheDir` | `string` | Directory to cache Art-Decor HTTP responses on disk |
 | `severityOverrides` | `Record<string, IssueSeverity>` | Override severity per issue code |
 | `fhirVersion` | `string` | Accepted FHIR version (e.g. `"4.0.1"`) |
-| `indexCachePath` | `string` | Path for the file index cache (default: `.fhir-index.json` next to first profiles dir) |
+| `indexCachePath` | `string` | Path for the file index cache. If omitted, no index is written to disk |
 | `eagerLoad` | `boolean` | Force eager loading of all files instead of lazy loading (default: `false`) |
 
 ### `FhirValidator.loadConfig(path)`
@@ -285,98 +371,7 @@ The validator maps well-known OID URNs to their canonical HL7 URLs before valida
 
 This ensures that Dutch FHIR resources using OID-based system URLs match ValueSets that reference the canonical HL7 URLs.
 
-## Resource Files
-
-The validator needs FHIR StructureDefinitions, ValueSets, and CodeSystems as JSON files to validate against. These are **included in the npm package** but can also be downloaded manually.
-
-### Directory Layout
-
-```
-profiles/r4-core/     -- Base FHIR R4 StructureDefinitions (658 files)
-profiles/nl-core/     -- nl-core profile overlays (164 files)
-terminology/r4-core/  -- Base FHIR R4 ValueSets and CodeSystems (2378 files)
-terminology/nl-core/  -- nl-core terminology (8 files)
-```
-
-Directories are loaded in order — base definitions first so that profile overlays can inherit from them.
-
-### Downloading FHIR R4 Core Definitions
-
-Download the official HL7 FHIR R4 definitions package and extract the JSON files:
-
-```bash
-# Download the FHIR R4 definitions
-curl -LO https://hl7.org/fhir/R4/definitions.json.zip
-
-# Extract StructureDefinitions into profiles/r4-core/
-mkdir -p profiles/r4-core
-unzip -j definitions.json.zip "profiles-resources.json" "profiles-types.json" -d /tmp/fhir-r4
-# Each file contains a Bundle — extract individual StructureDefinitions:
-node -e "
-  const fs = require('fs');
-  for (const f of ['profiles-resources', 'profiles-types']) {
-    const bundle = JSON.parse(fs.readFileSync('/tmp/fhir-r4/' + f + '.json', 'utf8'));
-    for (const entry of bundle.entry || []) {
-      const r = entry.resource;
-      if (r.resourceType === 'StructureDefinition') {
-        fs.writeFileSync('profiles/r4-core/StructureDefinition-' + r.id + '.json', JSON.stringify(r, null, 2));
-      }
-    }
-  }
-"
-
-# Extract ValueSets and CodeSystems into terminology/r4-core/
-mkdir -p terminology/r4-core
-unzip -j definitions.json.zip "valuesets.json" -d /tmp/fhir-r4
-node -e "
-  const fs = require('fs');
-  const bundle = JSON.parse(fs.readFileSync('/tmp/fhir-r4/valuesets.json', 'utf8'));
-  for (const entry of bundle.entry || []) {
-    const r = entry.resource;
-    if (r.resourceType === 'ValueSet') {
-      fs.writeFileSync('terminology/r4-core/ValueSet-' + r.id + '.json', JSON.stringify(r, null, 2));
-    } else if (r.resourceType === 'CodeSystem') {
-      fs.writeFileSync('terminology/r4-core/CodeSystem-' + r.id + '.json', JSON.stringify(r, null, 2));
-    }
-  }
-"
-```
-
-### Downloading nl-core Profiles
-
-The Dutch nl-core profiles are published by Nictiz as npm packages on the Simplifier registry:
-
-```bash
-# Download the nl-core package from Simplifier
-npm --registry https://packages.simplifier.net pack nictiz.fhir.nl.r4.nl-core
-
-# Extract StructureDefinitions
-mkdir -p profiles/nl-core
-tar xzf nictiz.fhir.nl.r4.nl-core-*.tgz
-node -e "
-  const fs = require('fs');
-  const dir = 'package/examples'; // or 'package' depending on package version
-  // Copy StructureDefinitions
-  for (const f of fs.readdirSync('package')) {
-    if (!f.endsWith('.json')) continue;
-    try {
-      const r = JSON.parse(fs.readFileSync('package/' + f, 'utf8'));
-      if (r.resourceType === 'StructureDefinition') {
-        fs.copyFileSync('package/' + f, 'profiles/nl-core/' + f);
-      } else if (r.resourceType === 'ValueSet') {
-        fs.mkdirSync('terminology/nl-core', {recursive: true});
-        fs.copyFileSync('package/' + f, 'terminology/nl-core/' + f);
-      } else if (r.resourceType === 'CodeSystem') {
-        fs.mkdirSync('terminology/nl-core', {recursive: true});
-        fs.copyFileSync('package/' + f, 'terminology/nl-core/' + f);
-      }
-    } catch {}
-  }
-"
-rm -rf package nictiz.fhir.nl.r4.nl-core-*.tgz
-```
-
-### Using Custom Profiles
+### Using custom profiles
 
 You can point the validator at any directory containing FHIR JSON files. For example, to add your own organization's profiles:
 
@@ -403,11 +398,24 @@ The validator uses a multi-layered caching strategy to minimize startup time and
 
 | Layer | What it does | Cache file |
 |---|---|---|
-| **File index** | Scans directories once, stores metadata (url, name, id, filePath) | `.fhir-index.json` |
+| **File index** | Scans directories once, stores metadata (url, name, id, filePath) | opt-in via `indexCachePath` |
 | **Lazy loading** | Loads JSON files from disk only when `resolve()` or `validateCode()` needs them | in-memory |
 | **Preload** | Bulk-loads all indexed files in parallel (for batch scenarios) | in-memory |
 | **validateCode cache** | Deduplicates identical terminology lookups within a session | in-memory |
-| **Art-Decor disk cache** | Saves HTTP responses from `decor.nictiz.nl` to disk | `.art-decor-cache/` |
+| **Art-Decor disk cache** | Saves HTTP responses from `decor.nictiz.nl` to disk | opt-in via `terminology.artDecor.cacheDir` |
+
+To enable disk caching for faster repeated startups and fewer network calls:
+
+```typescript
+const validator = await FhirValidator.create({
+  profilesDirs: ['profiles/r4-core', 'profiles/nl-core'],
+  terminologyDirs: ['terminology/r4-core', 'terminology/nl-core'],
+  indexCachePath: '.fhir-index.json',
+  terminology: {
+    artDecor: { cacheDir: '.art-decor-cache' },
+  },
+});
+```
 
 ### Benchmarks (822 profiles + 2386 terminology files, 171 sample resources)
 
