@@ -1,15 +1,8 @@
 // src/fhirpath/fhir-path-engine.ts
 import fhirpath, {type Model} from 'fhirpath';
+import r4Context from 'fhirpath/fhir-context/r4/index.js';
 
-// Try to load the R4 model
-let r4Model: Model | undefined;
-
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  r4Model = require('fhirpath/fhir-context/r4/index.js') as Model;
-} catch {
-  r4Model = undefined;
-}
+const r4Model: Model | undefined = r4Context as Model ?? undefined;
 
 export interface FhirPathResult {
   values: unknown[];
