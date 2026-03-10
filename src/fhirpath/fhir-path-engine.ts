@@ -6,7 +6,7 @@ let r4Model: Model | undefined;
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  r4Model = require('fhirpath/fhir-context/r4') as Model;
+  r4Model = require('fhirpath/fhir-context/r4/index.js') as Model;
 } catch {
   r4Model = undefined;
 }

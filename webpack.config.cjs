@@ -34,7 +34,7 @@ module.exports = {
   externals: {
     // Keep fhirpath as external dependency (peer/dependency, not bundled)
     fhirpath: 'module fhirpath',
-    'fhirpath/fhir-context/r4': 'module fhirpath/fhir-context/r4',
+    'fhirpath/fhir-context/r4/index.js': 'module fhirpath/fhir-context/r4/index.js',
     // Node built-ins
     crypto: 'module node:crypto',
     'fs/promises': 'module node:fs/promises',
