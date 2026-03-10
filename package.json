@@ -2,14 +2,14 @@
   "name": "fhir-validator-mx",
   "version": "0.1.2",
   "description": "FHIR R4 resource validator with Dutch nl-core profile support and Nictiz terminologieserver integration",
-  "main": "dist/index.js",
+  "type": "module",
+  "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "default": "./dist/index.js"
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
     }
   },
   "files": [
@@ -19,9 +19,9 @@
     "config.example.json"
   ],
   "scripts": {
-    "build": "webpack && tsc --emitDeclarationOnly --outDir dist",
+    "build": "webpack --config webpack.config.cjs && tsc --emitDeclarationOnly --outDir dist",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
-    "build:js": "webpack",
+    "build:js": "webpack --config webpack.config.cjs",
     "dev": "ts-node src/index.ts",
     "test": "jest",
     "lint": "eslint src/",

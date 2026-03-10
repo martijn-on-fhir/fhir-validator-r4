@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import { FhirValidator } from '../dist';
 
 async function main(): Promise<void> {
+
   const root = path.resolve(__dirname, '..');
   const dataDir = path.join(root, 'samples', 'data');
   const failuresDir = path.join(root, 'samples', 'failures');

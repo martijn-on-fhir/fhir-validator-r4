@@ -5,10 +5,12 @@ module.exports = {
   entry: './src/index.ts',
   target: 'node',
   devtool: 'source-map',
+  experiments: {outputModule: true},
   output: {
     path: path.resolve(__dirname, 'dist'),
-    filename: 'index.js',
-    library: {type: 'commonjs2'},
+    filename: 'index.mjs',
+    library: {type: 'module'},
+    chunkFormat: 'module',
     clean: true,
   },
   resolve: {
@@ -31,7 +33,13 @@ module.exports = {
   },
   externals: {
     // Keep fhirpath as external dependency (peer/dependency, not bundled)
-    fhirpath: 'commonjs fhirpath',
-    'fhirpath/fhir-context/r4': 'commonjs fhirpath/fhir-context/r4',
+    fhirpath: 'module fhirpath',
+    'fhirpath/fhir-context/r4': 'module fhirpath/fhir-context/r4',
+    // Node built-ins
+    crypto: 'module node:crypto',
+    'fs/promises': 'module node:fs/promises',
+    fs: 'module node:fs',
+    path: 'module node:path',
+    events: 'module node:events',
   },
 };
