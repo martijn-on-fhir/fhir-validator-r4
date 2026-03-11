@@ -1,6 +1,6 @@
 {
   "name": "fhir-validator-mx",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "FHIR R4 resource validator with Dutch nl-core profile support and Nictiz terminologieserver integration",
   "type": "module",
   "main": "dist/index.mjs",
