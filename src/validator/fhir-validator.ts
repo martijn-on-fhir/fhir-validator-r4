@@ -3,10 +3,11 @@ import { readFile } from 'fs/promises';
 import { FhirPathEngine } from '../fhirpath/fhir-path-engine';
 import { FileIndex } from '../registry/file-index';
 import { StructureDefinitionRegistry } from '../registry/structure-definition-registry';
+import type { ResourceSource } from '../sources/resource-source';
 import { StructuralValidator } from '../structural/structural-validator';
 import type { NictizTerminologyConfig } from '../terminology/nictiz-terminology-client';
 import { TerminologyService, type TerminologyServiceOptions } from '../terminology/terminology-service';
-import type { IssueSeverity, ValidationIssue, ValidationResult } from '../types/fhir';
+import type { IssueSeverity, StructureDefinition, ValidationIssue, ValidationResult, ValueSet, CodeSystem } from '../types/fhir';
 
 /** Configurable severity overrides per issue code */
 export type SeverityOverrides = Record<string, IssueSeverity>;
@@ -27,6 +28,8 @@ export interface FhirValidatorOptions {
   indexCachePath?: string;
   /** Force eager loading of all files instead of lazy loading (default: false) */
   eagerLoad?: boolean;
+  /** Additional resource sources (e.g. MongoSource). Loaded eagerly at create() time. */
+  sources?: ResourceSource[];
 }
 
 // Known dangerous keys that can cause prototype pollution
@@ -76,6 +79,9 @@ export class FhirValidator {
         await validator.terminology.loadFromDirectory(dir);
       }
 
+      // Load resources from additional sources (e.g. MongoDB)
+      await validator.loadSources(options.sources);
+
       return validator;
     }
 
@@ -98,7 +104,44 @@ export class FhirValidator {
       ...index.getEntries('CodeSystem'),
     ]);
 
+    // Load resources from additional sources (e.g. MongoDB)
+    await validator.loadSources(options.sources);
+
     return validator;
+  }
+
+  /**
+   * Load resources from additional sources (e.g. MongoDB) and register them.
+   */
+  private async loadSources(sources?: ResourceSource[]): Promise<void> {
+    if (!sources?.length) {
+      return;
+    }
+
+    // Find the first source that supports save() — used to persist externally resolved resources
+    const persistSource = sources.find(s => typeof s.save === 'function');
+
+    if (persistSource) {
+      this.terminology.onExternalResolve = (resource) => {
+        persistSource.save!(resource).catch(() => { /* ignore persist errors */ });
+      };
+    }
+
+    for (const source of sources) {
+      const resources = await source.loadAll();
+
+      for (const resource of resources) {
+        const rt = resource.resourceType;
+
+        if (rt === 'StructureDefinition') {
+          this.registry.register(resource as unknown as StructureDefinition);
+        } else if (rt === 'ValueSet') {
+          this.terminology.registerValueSet(resource as unknown as ValueSet);
+        } else if (rt === 'CodeSystem') {
+          this.terminology.registerCodeSystem(resource as unknown as CodeSystem);
+        }
+      }
+    }
   }
 
   /**

@@ -11,13 +11,14 @@ A TypeScript/Node.js library for validating FHIR R4 resources against StructureD
 - **Art-decor auto-resolution** — automatically fetches missing ValueSets and CodeSystems from `decor.nictiz.nl` at runtime
 - **Nictiz terminologieserver** — OAuth2 integration with the Dutch national terminology server for SNOMED CT NL validation
 - **Extensible binding support** — codes from systems outside the ValueSet are accepted for extensible/preferred bindings (FHIR spec)
-- **System aliases** — maps well-known OID URNs to canonical HL7 URLs (e.g. `urn:oid:1.0.639.1` to `iso639-1`)
+- **System aliases** — maps well-known OID URNs to canonical HL7 URLs (e.g. `urn:oid:1.0.639.1` to `iso639-1`), plus STU3↔R4 URL normalization (`http://hl7.org/fhir/v3/X` ↔ `http://terminology.hl7.org/CodeSystem/v3-X`)
 - **FHIRPath constraints** — evaluates FHIRPath invariant expressions
 - **Slicing support** — handles discriminated slicing (value, type, pattern discriminators)
 - **Fixed & pattern value checks** — enforces fixedCoding, patternIdentifier, etc.
 - **Lazy loading with file index** — builds a lightweight index on first run, loads files on demand (~230x faster startup)
 - **Art-Decor disk cache** — caches HTTP responses to disk, eliminating repeated network calls (~30x faster batch validation)
 - **Preload for batch mode** — `preload()` loads all indexed files in parallel for maximum throughput
+- **MongoDB source** — load conformance resources from MongoDB instead of (or alongside) the filesystem, with automatic persistence of externally resolved resources
 - **Multi-directory loading** — load profiles and terminology from multiple directories in order (base first, overlays second)
 - **BSN elfproef** — validates Dutch citizen service numbers using the 11-test algorithm
 - **Security** — prototype pollution detection, error message sanitization (no PHI leakage)
@@ -281,6 +282,82 @@ validator.terminology.registerValueSet({
 });
 ```
 
+### MongoDB Source
+
+Load conformance resources from a MongoDB collection instead of (or alongside) the filesystem. The `mongodb` driver is not bundled — you provide your own `Collection` instance.
+
+```typescript
+import { MongoClient } from 'mongodb';
+import { FhirValidator, MongoSource } from 'fhir-validator-mx';
+
+const client = new MongoClient('mongodb://localhost:27017');
+await client.connect();
+
+const collection = client.db('fhir').collection('conformance_resources');
+const validator = await FhirValidator.create({
+  sources: [new MongoSource(collection)],
+});
+
+const result = await validator.validate(resource);
+await client.close();
+```
+
+MongoDB and filesystem sources can be combined — filesystem directories are loaded first, then MongoDB resources are added on top:
+
+```typescript
+const validator = await FhirValidator.create({
+  profilesDirs: ['profiles/r4-core'],
+  terminologyDirs: ['terminology/r4-core'],
+  sources: [new MongoSource(collection)],
+});
+```
+
+An optional filter restricts which documents are loaded:
+
+```typescript
+const source = new MongoSource(collection, { status: 'active' });
+```
+
+**Auto-persist externally resolved resources** — When using a MongoDB source, ValueSets and CodeSystems fetched from external sources (Art-Decor, Nictiz) are automatically saved back to the MongoDB collection via upsert. This means the first validation run may fetch from the network, but subsequent runs find everything in the database.
+
+#### Filesystem vs MongoDB Comparison
+
+Validated 171 nl-core sample resources with identical profiles and terminology:
+
+| | Filesystem | MongoDB |
+|---|---|---|
+| **Conformance resources** | ~900 (local JSON) | 3,279 |
+| **Total time** | 3,341ms | 3,349ms |
+| **Avg per resource** | 19.5ms | 19.6ms |
+| **Passed** | 171 | 171 |
+| **Failed** | 0 | 0 |
+
+Performance is nearly identical. MongoDB loads all resources eagerly at `create()` time, while the filesystem uses lazy loading with an index. The MongoDB source provides a single centralized store that can be shared across services and automatically grows as new resources are resolved from external terminology servers.
+
+#### Custom ResourceSource
+
+Implement the `ResourceSource` interface to load from any backend:
+
+```typescript
+import type { ResourceSource } from 'fhir-validator-mx';
+
+class MyApiSource implements ResourceSource {
+  async loadAll(): Promise<Record<string, unknown>[]> {
+    const response = await fetch('https://my-fhir-server/conformance');
+    return response.json();
+  }
+
+  async save(resource: Record<string, unknown>): Promise<void> {
+    await fetch('https://my-fhir-server/conformance', {
+      method: 'PUT',
+      body: JSON.stringify(resource),
+    });
+  }
+}
+```
+
+The optional `save()` method enables auto-persistence of externally resolved resources.
+
 ## API
 
 ### `FhirValidator.create(options?)`
@@ -291,6 +368,7 @@ Factory method that creates a validator and loads profiles/terminology.
 |---|---|---|
 | `profilesDirs` | `string[]` | Directories containing StructureDefinition JSON files |
 | `terminologyDirs` | `string[]` | Directories containing ValueSet/CodeSystem JSON files |
+| `sources` | `ResourceSource[]` | Additional resource sources (e.g. `MongoSource`). Loaded eagerly at create time |
 | `terminology.nictiz` | `NictizTerminologyConfig` | Nictiz terminologieserver credentials |
 | `terminology.externalTxServer` | `string` | External terminology server URL (e.g. `https://tx.fhir.org/r4`) |
 | `terminology.externalTimeoutMs` | `number` | Timeout for external calls (default: 5000) |
@@ -364,12 +442,14 @@ When validating a code, the terminology service uses the following cascade:
 
 The validator maps well-known OID URNs to their canonical HL7 URLs before validation:
 
-| OID | Canonical URL |
+| OID / Legacy URL | Canonical URL |
 |---|---|
 | `urn:oid:1.0.639.1` | `http://terminology.hl7.org/CodeSystem/iso639-1` |
 | `urn:oid:2.16.840.1.113883.6.121` | `http://terminology.hl7.org/CodeSystem/iso639-2` |
+| `http://hl7.org/fhir/v3/*` (STU3) | `http://terminology.hl7.org/CodeSystem/v3-*` (R4) |
+| `http://hl7.org/fhir/v2/*` (STU3) | `http://terminology.hl7.org/CodeSystem/v2-*` (R4) |
 
-This ensures that Dutch FHIR resources using OID-based system URLs match ValueSets that reference the canonical HL7 URLs.
+This ensures that Dutch FHIR resources using OID-based system URLs or older STU3-style URLs match ValueSets that reference the canonical R4 URLs (and vice versa).
 
 ### Using custom profiles
 
@@ -455,7 +535,7 @@ The exit code is `1` if any file fails validation, `0` if all pass.
 npm run build        # Webpack bundle + type declarations
 npm run build:js     # Webpack bundle only
 npm run build:types  # Type declarations only
-npm test             # Run tests (30 tests)
+npm test             # Run tests (36 tests)
 npm run dev          # Run via ts-node
 npm run lint         # ESLint
 npm run validate     # CLI validator (see CLI section)

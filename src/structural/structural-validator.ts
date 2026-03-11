@@ -184,7 +184,8 @@ export class StructuralValidator {
           // Match by a specific field (use, system, code, etc.)
           // Check for fixed value on the child element
           const child = elementsById.get(el.id + '.' + disc.path);
-          matchValue = child?.fixedCode ?? child?.fixedString ?? child?.fixedUri;
+          matchValue = child?.fixedCode ?? child?.fixedString ?? child?.fixedUri
+            ?? child?.patternCodeableConcept ?? child?.patternCoding;
 
           // Fallback: check for pattern on the slice element itself
           if (matchValue === undefined) {
@@ -392,6 +393,19 @@ export class StructuralValidator {
 
         if (matchInfo.discriminatorPath === '$this') {
           return this.matchesPattern(obj, matchInfo.matchValue);
+        }
+
+        // If matchValue is an object (e.g. patternCodeableConcept), use pattern matching
+        if (matchInfo.matchValue && typeof matchInfo.matchValue === 'object') {
+          const fieldValue = matchInfo.discriminatorPath.includes('.')
+            ? this.getNestedValue(obj, matchInfo.discriminatorPath)
+            : obj[matchInfo.discriminatorPath];
+
+          if (!fieldValue || typeof fieldValue !== 'object') {
+            return false;
+          }
+
+          return this.matchesPattern(fieldValue as Record<string, unknown>, matchInfo.matchValue);
         }
 
         // Nested paths like "code.coding.system"

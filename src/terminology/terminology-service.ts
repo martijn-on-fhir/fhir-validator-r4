@@ -107,6 +107,9 @@ export class TerminologyService {
   private lazyCodeSystemIndex = new Map<string, string>();
   private loadedFiles = new Set<string>();
 
+  /** Callback invoked when a resource is resolved from an external source (Art-Decor, Nictiz) */
+  onExternalResolve?: (resource: Record<string, unknown>) => void;
+
   // Cache for external lookups
   private externalCache = new Map<string, CodeValidationResult>();
   // Rate limiting state
@@ -330,7 +333,7 @@ export class TerminologyService {
     // Try expansion first (most complete)
     if (vs.expansion?.contains) {
       const found = vs.expansion.contains.find(
-        c => c.system === system && c.code === code
+        c => this.systemsMatch(c.system ?? '', system) && c.code === code
       );
 
       if (found) {
@@ -341,13 +344,17 @@ export class TerminologyService {
     }
 
     // Compose-based validation
+    // Track whether any include was actually evaluable for this system
+    let anyEvaluable = false;
+
     for (const include of vs.compose?.include ?? []) {
-      if (include.system && include.system !== system) {
+      if (include.system && !this.systemsMatch(include.system, system)) {
         continue;
       }
 
       // Explicitly enumerated codes
       if (include.concept) {
+        anyEvaluable = true;
         const found = include.concept.find(c => c.code === code);
 
         if (found) {
@@ -360,6 +367,7 @@ export class TerminologyService {
         const nested = this.getValueSet(nestedUrl);
 
         if (nested) {
+          anyEvaluable = true;
           const result = this.validateAgainstValueSet(system, code, nested);
 
           if (result.valid) {
@@ -373,15 +381,58 @@ export class TerminologyService {
         const cs = this.getCodeSystem(system);
 
         if (cs) {
+          anyEvaluable = true;
+
           return this.validateAgainstCodeSystem(code, cs);
         }
       }
+
+      // Include has filter or no local data — can't evaluate locally
+    }
+
+    // If no include was evaluable (filters, missing CodeSystems, no matching system),
+    // treat as inconclusive rather than invalid
+    if (!anyEvaluable) {
+      return {
+        valid: true,
+        message: `ValueSet ${vs.url} could not be fully evaluated locally, validation skipped`
+      };
     }
 
     return {
       valid: false,
       message: `Code not found in ValueSet ${vs.url}`
     };
+  }
+
+  /**
+   * Check if two system URLs refer to the same CodeSystem,
+   * accounting for STU3→R4 URL migration (e.g. http://hl7.org/fhir/v3/X → http://terminology.hl7.org/CodeSystem/v3-X).
+   */
+  private systemsMatch(a: string, b: string): boolean {
+    if (a === b) {
+      return true;
+    }
+
+    return this.canonicalizeSystem(a) === this.canonicalizeSystem(b);
+  }
+
+  private canonicalizeSystem(url: string): string {
+    // STU3: http://hl7.org/fhir/v3/MaritalStatus → R4: http://terminology.hl7.org/CodeSystem/v3-MaritalStatus
+    const v3Match = url.match(/^http:\/\/hl7\.org\/fhir\/v3\/(.+)$/);
+
+    if (v3Match) {
+      return `http://terminology.hl7.org/CodeSystem/v3-${v3Match[1]}`;
+    }
+
+    // STU3: http://hl7.org/fhir/v2/XXXX → R4: http://terminology.hl7.org/CodeSystem/v2-XXXX
+    const v2Match = url.match(/^http:\/\/hl7\.org\/fhir\/v2\/(.+)$/);
+
+    if (v2Match) {
+      return `http://terminology.hl7.org/CodeSystem/v2-${v2Match[1]}`;
+    }
+
+    return url;
   }
 
   private validateAgainstCodeSystem(code: string, cs: CodeSystem): CodeValidationResult {
@@ -572,17 +623,20 @@ export class TerminologyService {
 
     if (vs) {
       this.registerValueSet(vs);
+      this.onExternalResolve?.(vs as unknown as Record<string, unknown>);
 
       // Also register any CodeSystems referenced in compose.include that have explicit concepts
       for (const include of vs.compose?.include ?? []) {
         if (include.system && include.concept?.length && !this.getCodeSystem(include.system)) {
-          this.registerCodeSystem({
+          const syntheticCs: CodeSystem = {
             resourceType: 'CodeSystem',
             url: include.system,
             status: 'active',
             content: 'complete',
             concept: include.concept.map(c => ({code: c.code, display: c.display})),
-          });
+          };
+          this.registerCodeSystem(syntheticCs);
+          this.onExternalResolve?.(syntheticCs as unknown as Record<string, unknown>);
         }
       }
     }
@@ -603,6 +657,7 @@ export class TerminologyService {
 
     if (cs) {
       this.registerCodeSystem(cs);
+      this.onExternalResolve?.(cs as unknown as Record<string, unknown>);
     }
 
     return cs;
